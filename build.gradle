@@ -68,7 +68,7 @@ android {
         // requires minSdkVersion 14, forcing a bump verson minSdkVersion 7
         // But since only 0.8% of Android devices have < SDK 14 as of Une 2017, this will become
         // the new min version for this library in order to target Android O
-        minSdkVersion 14
+        minSdkVersion 18
         targetSdkVersion 27
         versionCode 1
         versionName version
@@ -104,6 +104,7 @@ dependencies {
     compile fileTree ( dir: 'libs', include: ['*.jar'] )
     compile 'com.android.support:support-v4:27.0.0'
     compile 'com.android.support:support-annotations:26.0.0'
+    compile 'no.nordicsemi.android.support.v18:scanner:1.1.0'
 
     testCompile('junit:junit:4.12') {
         exclude group: 'org.hamcrest'

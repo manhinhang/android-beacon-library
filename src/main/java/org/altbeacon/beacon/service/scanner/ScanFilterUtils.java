@@ -33,6 +33,13 @@ public class ScanFilterUtils {
         return scanFilters;
     }
 
+    public List<no.nordicsemi.android.support.v18.scanner.ScanFilter> createWildcardScanFiltersGeneric() {
+        List<no.nordicsemi.android.support.v18.scanner.ScanFilter> scanFilters = new ArrayList<no.nordicsemi.android.support.v18.scanner.ScanFilter>();
+        no.nordicsemi.android.support.v18.scanner.ScanFilter.Builder builder = new no.nordicsemi.android.support.v18.scanner.ScanFilter.Builder();
+        scanFilters.add(builder.build());
+        return scanFilters;
+    }
+
     public List<ScanFilterData> createScanFilterDataForBeaconParser(BeaconParser beaconParser) {
         ArrayList<ScanFilterData> scanFilters = new ArrayList<ScanFilterData>();
         for (int manufacturer : beaconParser.getHardwareAssistManufacturers()) {
@@ -93,6 +100,40 @@ public class ScanFilterUtils {
                     builder.setManufacturerData((int) sfd.manufacturer, sfd.filter, sfd.mask);
                 }
                 ScanFilter scanFilter = builder.build();
+                if (LogManager.isVerboseLoggingEnabled()) {
+                    LogManager.d(TAG, "Set up a scan filter: "+scanFilter);
+                }
+                scanFilters.add(scanFilter);
+            }
+        }
+        return scanFilters;
+    }
+
+    public List<no.nordicsemi.android.support.v18.scanner.ScanFilter> createScanFiltersForBeaconParsersGeneric(List<BeaconParser> beaconParsers) {
+        List<no.nordicsemi.android.support.v18.scanner.ScanFilter> scanFilters = new ArrayList<no.nordicsemi.android.support.v18.scanner.ScanFilter>();
+        // for each beacon parser, make a filter expression that includes all its desired
+        // hardware manufacturers
+        for (BeaconParser beaconParser: beaconParsers) {
+            List<ScanFilterData> sfds = createScanFilterDataForBeaconParser(beaconParser);
+            for (ScanFilterData sfd: sfds) {
+                no.nordicsemi.android.support.v18.scanner.ScanFilter.Builder builder = new no.nordicsemi.android.support.v18.scanner.ScanFilter.Builder();
+                if (sfd.serviceUuid != null) {
+                    // Use a 16 bit service UUID in a 128 bit form
+                    String serviceUuidString = String.format("0000%04X-0000-1000-8000-00805f9b34fb", sfd.serviceUuid);
+                    String serviceUuidMaskString = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF";
+                    ParcelUuid parcelUuid = ParcelUuid.fromString(serviceUuidString);
+                    ParcelUuid parcelUuidMask = ParcelUuid.fromString(serviceUuidMaskString);
+                    if (LogManager.isVerboseLoggingEnabled()) {
+                        LogManager.d(TAG, "making scan filter for service: "+serviceUuidString+" "+parcelUuid);
+                        LogManager.d(TAG, "making scan filter with service mask: "+serviceUuidMaskString+" "+parcelUuidMask);
+                    }
+                    builder.setServiceUuid(parcelUuid, parcelUuidMask);
+                }
+                else {
+                    builder.setServiceUuid(null);
+                    builder.setManufacturerData((int) sfd.manufacturer, sfd.filter, sfd.mask);
+                }
+                no.nordicsemi.android.support.v18.scanner.ScanFilter scanFilter = builder.build();
                 if (LogManager.isVerboseLoggingEnabled()) {
                     LogManager.d(TAG, "Set up a scan filter: "+scanFilter);
                 }
