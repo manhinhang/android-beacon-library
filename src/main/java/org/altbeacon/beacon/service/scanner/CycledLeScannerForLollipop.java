@@ -174,8 +174,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
         if (!mMainScanCycleActive) {
             LogManager.d(TAG, "starting filtered scan in SCAN_MODE_LOW_POWER");
             settings = (new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)).build();
-            filters = new ScanFilterUtils().createScanFiltersForBeaconParsers(
-                          mBeaconManager.getBeaconParsers());
+
         } else {
             LogManager.d(TAG, "starting non-filtered scan in SCAN_MODE_LOW_LATENCY");
             settings = (new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)).build();
@@ -186,10 +185,12 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             // left null.  The wildcard filter matches everything.
             // We only add these filters on 8.1+ devices, because adding scan filters has been reported
             // to cause scan failures on some Samsung devices with Android 5.x
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                filters = new ScanFilterUtils().createWildcardScanFilters();
-            }
+//            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+//                filters = new ScanFilterUtils().createWildcardScanFilters();
+//            }
         }
+        filters = new ScanFilterUtils().createScanFiltersForBeaconParsers(
+                mBeaconManager.getBeaconParsers());
 
         if (settings != null) {
             postStartLeScan(filters, settings);
