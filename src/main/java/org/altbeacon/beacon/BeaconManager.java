@@ -177,12 +177,13 @@ public class BeaconManager {
      * Set to true if you want to show library debugging.
      *
      * @param debug True turn on all logs for this library to be printed out to logcat. False turns
-     *              off all logging.
-     * @deprecated To be removed in a future release. Use
+     *              off detailed logging..
+     *
+     * This is a convenience method that calls setLogger to a verbose logger and enables verbose
+     * logging. For more fine grained control, use:
      * {@link org.altbeacon.beacon.logging.LogManager#setLogger(org.altbeacon.beacon.logging.Logger)}
      * instead.
      */
-    @Deprecated
     public static void setDebug(boolean debug) {
         if (debug) {
             LogManager.setLogger(Loggers.verboseLogger());
@@ -393,7 +394,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public boolean checkAvailability() throws BleNotAvailableException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             throw new BleNotAvailableException("Bluetooth LE not supported by this device");
         }
         return ((BluetoothManager) mContext.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter().isEnabled();
@@ -407,12 +408,8 @@ public class BeaconManager {
      * @param consumer the <code>Activity</code> or <code>Service</code> that will receive the callback when the service is ready.
      */
     public void bind(@NonNull BeaconConsumer consumer) {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
-            return;
-        }
-        if (!mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
-            LogManager.w(TAG, "This device does not support bluetooth LE.  Will not start beacon scanning.");
             return;
         }
         synchronized (consumers) {
@@ -430,6 +427,13 @@ public class BeaconManager {
                 else {
                     LogManager.d(TAG, "Binding to service");
                     Intent intent = new Intent(consumer.getApplicationContext(), BeaconService.class);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                            this.getForegroundServiceNotification() != null) {
+                        LogManager.i(TAG, "Starting foreground beacon scanning service.");
+                        mContext.startForegroundService(intent);
+                    }
+                    else {
+                    }
                     consumer.bindService(intent, newConsumerInfo.beaconServiceConnection, Context.BIND_AUTO_CREATE);
                 }
                 LogManager.d(TAG, "consumer count is now: %s", consumers.size());
@@ -444,7 +448,7 @@ public class BeaconManager {
      * @param consumer the <code>Activity</code> or <code>Service</code> that no longer needs to use the service.
      */
     public void unbind(@NonNull BeaconConsumer consumer) {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -468,8 +472,10 @@ public class BeaconManager {
                     mBackgroundMode = false;
                     // If we are using scan jobs, we cancel the active scan job
                     if (mScheduledScanJobsEnabled) {
-                        // TODO: Cancel the active scan job.  Without this is keeps scanning as if
-                        // a consumer is bound.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            LogManager.i(TAG, "Cancelling scheduled jobs after unbind of last consumer.");
+                            ScanJobScheduler.getInstance().cancelSchedule(mContext);
+                        }
                     }
                 }
             }
@@ -531,7 +537,7 @@ public class BeaconManager {
      * @see #setBackgroundBetweenScanPeriod(long p)
      */
     public void setBackgroundMode(boolean backgroundMode) {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -822,7 +828,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public void startRangingBeaconsInRegion(@NonNull Region region) throws RemoteException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -847,7 +853,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public void stopRangingBeaconsInRegion(@NonNull Region region) throws RemoteException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -910,7 +916,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public void startMonitoringBeaconsInRegion(@NonNull Region region) throws RemoteException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -941,7 +947,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public void stopMonitoringBeaconsInRegion(@NonNull Region region) throws RemoteException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -965,7 +971,7 @@ public class BeaconManager {
      */
     @TargetApi(18)
     public void updateScanPeriods() throws RemoteException {
-        if (!isBleAvailable()) {
+        if (!isBleAvailableOrSimulated()) {
             LogManager.w(TAG, "Method invocation will be ignored.");
             return;
         }
@@ -980,7 +986,9 @@ public class BeaconManager {
     @TargetApi(18)
     private void applyChangesToServices(int type, Region region) throws RemoteException {
         if (mScheduledScanJobsEnabled) {
-            ScanJobScheduler.getInstance().applySettingsToScheduledJob(mContext, this);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                ScanJobScheduler.getInstance().applySettingsToScheduledJob(mContext, this);
+            }
             return;
         }
         if (serviceMessenger == null) {
@@ -1122,7 +1130,7 @@ public class BeaconManager {
     @Nullable
     protected static BeaconSimulator beaconSimulator;
 
-    protected static String distanceModelUpdateUrl = "http://data.altbeacon.org/android-distance.json";
+    protected static String distanceModelUpdateUrl = "https://s3.amazonaws.com/android-beacon-library/android-distance.json";
 
     public static String getDistanceModelUpdateUrl() {
         return distanceModelUpdateUrl;
@@ -1196,6 +1204,12 @@ public class BeaconManager {
         mNonBeaconLeScanCallback = callback;
     }
 
+    private boolean isBleAvailableOrSimulated() {
+        if (getBeaconSimulator() != null) {
+            return true;
+        }
+        return isBleAvailable();
+    }
     private boolean isBleAvailable() {
         boolean available = false;
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {

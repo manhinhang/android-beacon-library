@@ -1,3 +1,18 @@
+### 2.15.2 / 2018-10-17
+
+- Prevent infrequent out of memory crashes on Android 8+ (#750 Pappas Christodoulos, David G. Young)
+- Prevent duplicate ranging/monitoring callbacks casued by bind/unbind with a service
+  (#748, Adrián Nieto Rodríguez, #745, David G. Young)
+- Allow starting foreground service at boot (#746, David G. Young)
+- Re-enable broken BeaconSimulator (#751, David G. Young)
+
+### 2.15.1 / 2018-09-01
+
+ - Prevent crash caused by internal Android exception when stopping scanning (#724, David G. Young)
+ - Fix Android 8 crashing apps on background monitoring/ranging data delivery (#720, David G. Young)
+ - Fix intermittent NPE on ranging beacons (#716, Federico Bertoli, David G. Young)
+ - Stop running scheduled jobs to do scans after last consumer unbound. (#702, David G. Young)
+
 ### 2.15 / 2018-07-04
 
 Enhancements:
