@@ -45,6 +45,7 @@ import android.support.annotation.RestrictTo;
 import android.support.annotation.RestrictTo.Scope;
 
 import org.altbeacon.beacon.Beacon;
+import org.altbeacon.beacon.BeaconLocalBroadcastProcessor;
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.BeaconParser;
 import org.altbeacon.beacon.BuildConfig;
@@ -75,6 +76,8 @@ public class BeaconService extends Service {
     private final Handler handler = new Handler();
     private BluetoothCrashResolver bluetoothCrashResolver;
     private ScanHelper mScanHelper;
+    private BeaconLocalBroadcastProcessor mBeaconNotificationProcessor;
+
     /*
      * The scan period is how long we wait between restarting the BLE advertisement scans
      * Each time we restart we only see the unique advertisements once (e.g. unique beacons)
@@ -210,6 +213,8 @@ public class BeaconService extends Service {
         beaconManager.setScannerInSameProcess(true);
         if (beaconManager.isMainProcess()) {
             LogManager.i(TAG, "beaconService version %s is starting up on the main process", BuildConfig.VERSION_NAME);
+            // if we are on the main process, we use local broadcast notifications to deliver results.
+            ensureNotificationProcessorSetup();
         }
         else {
             LogManager.i(TAG, "beaconService version %s is starting up on a separate process", BuildConfig.VERSION_NAME);
@@ -220,7 +225,9 @@ public class BeaconService extends Service {
         String longScanForcingEnabled = getManifestMetadataValue("longScanForcingEnabled");
         if (longScanForcingEnabled != null && longScanForcingEnabled.equals("true")) {
             LogManager.i(TAG, "longScanForcingEnabled to keep scans going on Android N for > 30 minutes");
-            mScanHelper.getCycledScanner().setLongScanForcingEnabled(true);
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().setLongScanForcingEnabled(true);
+            }
         }
 
         mScanHelper.reloadParsers();
@@ -240,6 +247,15 @@ public class BeaconService extends Service {
         }
         this.startForegroundIfConfigured();
     }
+
+
+    private void ensureNotificationProcessorSetup() {
+        if (mBeaconNotificationProcessor == null) {
+            mBeaconNotificationProcessor = new BeaconLocalBroadcastProcessor(this);
+            mBeaconNotificationProcessor.register();
+        }
+    }
+
 
     /*
      * This starts the scanning service as a foreground service if it is so configured in the
@@ -306,12 +322,18 @@ public class BeaconService extends Service {
             LogManager.w(TAG, "Not supported prior to API 18.");
             return;
         }
+        if (mBeaconNotificationProcessor != null) {
+            mBeaconNotificationProcessor.unregister();
+        }
         stopForeground(true);
         bluetoothCrashResolver.stop();
         LogManager.i(TAG, "onDestroy called.  stopping scanning");
         handler.removeCallbacksAndMessages(null);
-        mScanHelper.getCycledScanner().stop();
-        mScanHelper.getCycledScanner().destroy();
+
+        if (mScanHelper.getCycledScanner() == null) {
+            mScanHelper.getCycledScanner().stop();
+            mScanHelper.getCycledScanner().destroy();
+        }
         mScanHelper.getMonitoringStatus().stopStatusPreservation();
     }
 
@@ -346,7 +368,9 @@ public class BeaconService extends Service {
             mScanHelper.getRangedRegionState().put(region, new RangeState(callback));
             LogManager.d(TAG, "Currently ranging %s regions.", mScanHelper.getRangedRegionState().size());
         }
-        mScanHelper.getCycledScanner().start();
+        if (mScanHelper.getCycledScanner() != null) {
+            mScanHelper.getCycledScanner().start();
+        }
     }
 
     @MainThread
@@ -359,7 +383,9 @@ public class BeaconService extends Service {
         }
 
         if (rangedRegionCount == 0 && mScanHelper.getMonitoringStatus().regionsCount() == 0) {
-            mScanHelper.getCycledScanner().stop();
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().stop();
+            }
         }
     }
 
@@ -368,7 +394,9 @@ public class BeaconService extends Service {
         LogManager.d(TAG, "startMonitoring called");
         mScanHelper.getMonitoringStatus().addRegion(region, callback);
         LogManager.d(TAG, "Currently monitoring %s regions.", mScanHelper.getMonitoringStatus().regionsCount());
-        mScanHelper.getCycledScanner().start();
+        if (mScanHelper.getCycledScanner() != null) {
+            mScanHelper.getCycledScanner().start();
+        }
     }
 
     @MainThread
@@ -377,13 +405,17 @@ public class BeaconService extends Service {
         mScanHelper.getMonitoringStatus().removeRegion(region);
         LogManager.d(TAG, "Currently monitoring %s regions.", mScanHelper.getMonitoringStatus().regionsCount());
         if (mScanHelper.getMonitoringStatus().regionsCount() == 0 && mScanHelper.getRangedRegionState().size() == 0) {
-            mScanHelper.getCycledScanner().stop();
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().stop();
+            }
         }
     }
 
     @MainThread
     public void setScanPeriods(long scanPeriod, long betweenScanPeriod, boolean backgroundFlag) {
-        mScanHelper.getCycledScanner().setScanPeriods(scanPeriod, betweenScanPeriod, backgroundFlag);
+        if (mScanHelper.getCycledScanner() != null) {
+            mScanHelper.getCycledScanner().setScanPeriods(scanPeriod, betweenScanPeriod, backgroundFlag);
+        }
     }
 
     public void reloadParsers() {

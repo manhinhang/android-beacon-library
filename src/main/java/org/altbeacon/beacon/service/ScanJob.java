@@ -54,7 +54,10 @@ public class ScanJob extends JobService {
 
     @Override
     public boolean onStartJob(final JobParameters jobParameters) {
-        initialzeScanHelper();
+        if (!initialzeScanHelper()) {
+            LogManager.e(TAG, "Cannot allocate a scanner to look for beacons.  System resources are low.");
+            return false;
+        }
         if (jobParameters.getJobId() == getImmediateScanJobId(this)) {
             LogManager.i(TAG, "Running immediate scan job: instance is "+this);
         }
@@ -163,12 +166,15 @@ public class ScanJob extends JobService {
 
     private void stopScanning() {
         mInitialized = false;
-        mScanHelper.getCycledScanner().stop();
-        mScanHelper.getCycledScanner().destroy();
+        if (mScanHelper.getCycledScanner() != null) {
+            mScanHelper.getCycledScanner().stop();
+            mScanHelper.getCycledScanner().destroy();
+        }
         LogManager.d(TAG, "Scanning stopped");
     }
 
-    private void initialzeScanHelper() {
+    // Returns false if cycle thread cannot be allocated
+    private boolean initialzeScanHelper() {
         mScanHelper = new ScanHelper(this);
         mScanState = ScanState.restore(ScanJob.this);
         mScanState.setLastScanStartTimeMillis(System.currentTimeMillis());
@@ -177,8 +183,15 @@ public class ScanJob extends JobService {
         mScanHelper.setBeaconParsers(mScanState.getBeaconParsers());
         mScanHelper.setExtraDataBeaconTracker(mScanState.getExtraBeaconDataTracker());
         if (mScanHelper.getCycledScanner() == null) {
-            mScanHelper.createCycledLeScanner(mScanState.getBackgroundMode(), null);
+            try {
+                mScanHelper.createCycledLeScanner(mScanState.getBackgroundMode(), null);
+            }
+            catch (OutOfMemoryError e) {
+                LogManager.w(TAG, "Failed to create CycledLeScanner thread.");
+                return false;
+            }
         }
+        return true;
     }
 
     // Returns true of scanning actually was started, false if it did not need to be
@@ -188,22 +201,30 @@ public class ScanJob extends JobService {
         }
         long scanPeriod = mScanState.getBackgroundMode() ? mScanState.getBackgroundScanPeriod() : mScanState.getForegroundScanPeriod();
         long betweenScanPeriod = mScanState.getBackgroundMode() ? mScanState.getBackgroundBetweenScanPeriod() : mScanState.getForegroundBetweenScanPeriod();
-        mScanHelper.getCycledScanner().setScanPeriods(scanPeriod,
-                                                      betweenScanPeriod,
-                                                      mScanState.getBackgroundMode());
+        if (mScanHelper.getCycledScanner() != null) {
+            mScanHelper.getCycledScanner().setScanPeriods(scanPeriod,
+                    betweenScanPeriod,
+                    mScanState.getBackgroundMode());
+        }
         mInitialized = true;
         if (scanPeriod <= 0) {
             LogManager.w(TAG, "Starting scan with scan period of zero.  Exiting ScanJob.");
-            mScanHelper.getCycledScanner().stop();
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().stop();
+            }
             return false;
         }
 
         if (mScanHelper.getRangedRegionState().size() > 0 || mScanHelper.getMonitoringStatus().regions().size() > 0) {
-            mScanHelper.getCycledScanner().start();
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().start();
+            }
             return true;
         }
         else {
-            mScanHelper.getCycledScanner().stop();
+            if (mScanHelper.getCycledScanner() != null) {
+                mScanHelper.getCycledScanner().stop();
+            }
             return false;
         }
     }
