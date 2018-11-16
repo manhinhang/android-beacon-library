@@ -222,11 +222,11 @@ public class BeaconService extends Service {
             LogManager.i(TAG, "beaconService PID is "+processUtils.getPid()+" with process name "+processUtils.getProcessName());
         }
 
-        String longScanForcingEnabled = getManifestMetadataValue("longScanForcingEnabled");
-        if (longScanForcingEnabled != null && longScanForcingEnabled.equals("true")) {
-            LogManager.i(TAG, "longScanForcingEnabled to keep scans going on Android N for > 30 minutes");
+//        String longScanForcingEnabled = getManifestMetadataValue("longScanForcingEnabled");
+//        if (longScanForcingEnabled != null && longScanForcingEnabled.equals("true")) {
+//            LogManager.i(TAG, "longScanForcingEnabled to keep scans going on Android N for > 30 minutes");
             mScanHelper.getCycledScanner().setLongScanForcingEnabled(true);
-        }
+//        }
 
         mScanHelper.reloadParsers();
 
