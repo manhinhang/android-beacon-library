@@ -12,15 +12,14 @@ import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.os.AsyncTask;
 import android.os.Build;
-import android.support.annotation.MainThread;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.annotation.RequiresApi;
-import android.support.annotation.WorkerThread;
-import android.support.annotation.RestrictTo;
-import android.support.annotation.RestrictTo.Scope;
+import android.util.Log;
+
+import androidx.annotation.MainThread;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.WorkerThread;
 
 import org.altbeacon.beacon.Beacon;
 import org.altbeacon.beacon.BeaconManager;
@@ -78,12 +77,17 @@ class ScanHelper {
     private Context mContext;
 
     ScanHelper(Context context) {
+        LogManager.d(TAG, "new ScanHelper");
         mContext = context;
         mBeaconManager = BeaconManager.getInstanceForApplication(context);
     }
 
     private ExecutorService getExecutor() {
+        if (mExecutor != null && mExecutor.isShutdown()) {
+            LogManager.w(TAG, "ThreadPoolExecutor unexpectedly shut down");
+        }
         if (mExecutor == null) {
+            LogManager.d(TAG, "ThreadPoolExecutor created");
             mExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
         }
         return mExecutor;
@@ -127,6 +131,7 @@ class ScanHelper {
     }
 
     void setRangedRegionState(Map<Region, RangeState> rangedRegionState) {
+        LogManager.d(TAG, "rangeRegionState updated with %d regions", rangedRegionState.size());
         synchronized (mRangedRegionState) {
             mRangedRegionState.clear();
             mRangedRegionState.putAll(rangedRegionState);
@@ -138,6 +143,10 @@ class ScanHelper {
     }
 
     void setBeaconParsers(Set<BeaconParser> beaconParsers) {
+        Log.d(TAG, "BeaconParsers set to  count: "+beaconParsers.size());
+        if (beaconParsers.size() > 0) {
+            Log.d(TAG, "First parser layout: "+beaconParsers.iterator().next().getLayout());
+        }
         mBeaconParsers = beaconParsers;
     }
 
@@ -153,12 +162,11 @@ class ScanHelper {
     }
 
     @TargetApi(Build.VERSION_CODES.HONEYCOMB)
-    void processScanResult(BluetoothDevice device, int rssi, byte[] scanRecord) {
+    void processScanResult(BluetoothDevice device, int rssi, byte[] scanRecord, long timestampMs) {
         NonBeaconLeScanCallback nonBeaconLeScanCallback = mBeaconManager.getNonBeaconLeScanCallback();
 
         try {
-            new ScanHelper.ScanProcessor(nonBeaconLeScanCallback).executeOnExecutor(getExecutor(),
-                    new ScanHelper.ScanData(device, rssi, scanRecord));
+            getExecutor().execute(new ScanProcessorRunnable(nonBeaconLeScanCallback, new ScanHelper.ScanData(device, rssi, scanRecord, timestampMs)));
         } catch (RejectedExecutionException e) {
             LogManager.w(TAG, "Ignoring scan result because we cannot keep up.");
         } catch (OutOfMemoryError e) {
@@ -184,16 +192,20 @@ class ScanHelper {
 
     @RequiresApi(api = Build.VERSION_CODES.O)
     void startAndroidOBackgroundScan(Set<BeaconParser> beaconParsers) {
+        startAndroidOBackgroundScan(beaconParsers, null);
+    }
+    @RequiresApi(api = Build.VERSION_CODES.O)
+    void startAndroidOBackgroundScan(Set<BeaconParser> beaconParsers, List<Region> regions) {
         ScanSettings settings = (new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)).build();
         List<ScanFilter> filters = new ScanFilterUtils().createScanFiltersForBeaconParsers(
-                new ArrayList<BeaconParser>(beaconParsers));
+                new ArrayList<BeaconParser>(beaconParsers), regions);
         try {
             final BluetoothManager bluetoothManager =
                     (BluetoothManager) mContext.getApplicationContext().getSystemService(Context.BLUETOOTH_SERVICE);
             BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
             if (bluetoothAdapter == null) {
                 LogManager.w(TAG, "Failed to construct a BluetoothAdapter");
-            } else if (!bluetoothAdapter.isEnabled()) {
+            } else if (!bluetoothAdapter.isEnabled() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
                 LogManager.w(TAG, "Failed to start background scan on Android O: BluetoothAdapter is not enabled");
             } else {
                 BluetoothLeScanner scanner = bluetoothAdapter.getBluetoothLeScanner();
@@ -227,7 +239,7 @@ class ScanHelper {
             BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
             if (bluetoothAdapter == null) {
                 LogManager.w(TAG, "Failed to construct a BluetoothAdapter");
-            } else if (!bluetoothAdapter.isEnabled()) {
+            } else if (!bluetoothAdapter.isEnabled() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
                 LogManager.w(TAG, "BluetoothAdapter is not enabled");
             } else {
                BluetoothLeScanner scanner =  bluetoothAdapter.getBluetoothLeScanner();
@@ -247,18 +259,25 @@ class ScanHelper {
     }
 
     // Low power scan results in the background will be delivered via Intent
+    @SuppressLint("WrongConstant")
     PendingIntent getScanCallbackIntent() {
         Intent intent = new Intent(mContext, StartupBroadcastReceiver.class);
         intent.putExtra("o-scan", true);
-        return PendingIntent.getBroadcast(mContext,0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        /* Android 12 (SDK 31) requires that all PendingIntents be created with either FLAG_MUTABLE or
+           FLAG_IMMUTABLE.  In this case we must use FLAG_MUTABLE because the scan will set additional flags
+           on the intent -- that is how Andorid's Intent-driven scan APIs work.  But because this library
+           is being compiled with SDK 30, the FLAG_MUTABLE is not available yet. We therefore use the hard-coded
+           value for this flag from SDK 31 release 1 and will fix that once the final SDK 31 is tested with this library.
+         */
+        return PendingIntent.getBroadcast(mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | 0x02000000);
     }
 
     private final CycledLeScanCallback mCycledLeScanCallback = new CycledLeScanCallback() {
         @TargetApi(Build.VERSION_CODES.HONEYCOMB)
         @Override
         @MainThread
-        public void onLeScan(BluetoothDevice device, int rssi, byte[] scanRecord) {
-            processScanResult(device, rssi, scanRecord);
+        public void onLeScan(BluetoothDevice device, int rssi, byte[] scanRecord, long timestampMs) {
+            processScanResult(device, rssi, scanRecord, timestampMs);
         }
 
         @Override
@@ -296,7 +315,6 @@ class ScanHelper {
         }
     };
 
-    @RestrictTo(Scope.TESTS)
     CycledLeScanCallback getCycledLeScanCallback() {
         return mCycledLeScanCallback;
     }
@@ -312,7 +330,7 @@ class ScanHelper {
     }
 
     /**
-     * Helper for processing BLE beacons. This has been extracted from {@link ScanHelper.ScanProcessor} to
+     * Helper for processing BLE beacons. This has been extracted from ScanProcessor to
      * support simulated scan data for test and debug environments.
      * <p>
      * Processing beacons is a frequent and expensive operation. It should not be run on the main
@@ -357,15 +375,27 @@ class ScanHelper {
             }
         }
     }
+    
+    public boolean anyBeaconsDetectedThisCycle() {
+        synchronized (mRangedRegionState) {
+            for (RangeState rangeState: mRangedRegionState.values()) {
+                if (rangeState.count() > 0) {
+                    return true;
+                }
+            }
+        }
+        return mMonitoringStatus.insideAnyRegion();
+    }
 
     /**
      * <strong>This class is not thread safe.</strong>
      */
     private class ScanData {
-        ScanData(@NonNull BluetoothDevice device, int rssi, @NonNull byte[] scanRecord) {
+        ScanData(@NonNull BluetoothDevice device, int rssi, @NonNull byte[] scanRecord, long timestampMs) {
             this.device = device;
             this.rssi = rssi;
             this.scanRecord = scanRecord;
+            this.timestampMs = timestampMs;
         }
 
         final int rssi;
@@ -375,26 +405,36 @@ class ScanHelper {
 
         @NonNull
         byte[] scanRecord;
+
+        @NonNull
+        long timestampMs;
     }
 
-    private class ScanProcessor extends AsyncTask<ScanHelper.ScanData, Void, Void> {
-        final DetectionTracker mDetectionTracker = DetectionTracker.getInstance();
+    private class ScanProcessorRunnable implements Runnable {
+        DetectionTracker detectionTracker = DetectionTracker.getInstance();
+        NonBeaconLeScanCallback nonBeaconLeScanCallback;
+        ScanHelper.ScanData scanData;
 
-        private final NonBeaconLeScanCallback mNonBeaconLeScanCallback;
-
-        ScanProcessor(NonBeaconLeScanCallback nonBeaconLeScanCallback) {
-            mNonBeaconLeScanCallback = nonBeaconLeScanCallback;
+        ScanProcessorRunnable(NonBeaconLeScanCallback nonBeaconLeScanCallback, ScanData scanData) {
+            this.nonBeaconLeScanCallback = nonBeaconLeScanCallback;
+            this.scanData = scanData;
         }
 
-        @WorkerThread
         @Override
-        protected Void doInBackground(ScanHelper.ScanData... params) {
-            ScanHelper.ScanData scanData = params[0];
+        public void run() {
             Beacon beacon = null;
+            if (LogManager.isVerboseLoggingEnabled()) {
+                LogManager.d(TAG, "Processing packet");
+            }
+            if (ScanHelper.this.mBeaconParsers.size() > 0) {
+                LogManager.d(TAG, "Decoding beacon. First parser layout: "+mBeaconParsers.iterator().next().getLayout());
+            }
+            else {
+                LogManager.w(TAG, "API No beacon parsers registered when decoding beacon");
+            }
 
             for (BeaconParser parser : ScanHelper.this.mBeaconParsers) {
-                beacon = parser.fromScanData(scanData.scanRecord,
-                        scanData.rssi, scanData.device);
+                beacon = parser.fromScanData(scanData.scanRecord, scanData.rssi, scanData.device, scanData.timestampMs);
 
                 if (beacon != null) {
                     break;
@@ -404,7 +444,7 @@ class ScanHelper {
                 if (LogManager.isVerboseLoggingEnabled()) {
                     LogManager.d(TAG, "Beacon packet detected for: "+beacon+" with rssi "+beacon.getRssi());
                 }
-                mDetectionTracker.recordDetection();
+                detectionTracker.recordDetection();
                 if (mCycledScanner != null && !mCycledScanner.getDistinctPacketsDetectedPerScan()) {
                     if (!mDistinctPacketDetector.isPacketDistinct(scanData.device.getAddress(),
                             scanData.scanRecord)) {
@@ -414,33 +454,24 @@ class ScanHelper {
                 }
                 processBeaconFromScan(beacon);
             } else {
-                if (mNonBeaconLeScanCallback != null) {
-                    mNonBeaconLeScanCallback.onNonBeaconLeScan(scanData.device, scanData.rssi, scanData.scanRecord);
+                if (nonBeaconLeScanCallback != null) {
+                    nonBeaconLeScanCallback.onNonBeaconLeScan(scanData.device, scanData.rssi, scanData.scanRecord);
                 }
             }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(Void result) {
-        }
-
-        @Override
-        protected void onPreExecute() {
-        }
-
-        @Override
-        protected void onProgressUpdate(Void... values) {
         }
     }
 
     private List<Region> matchingRegions(Beacon beacon, Collection<Region> regions) {
         List<Region> matched = new ArrayList<>();
         for (Region region : regions) {
-            if (region.matchesBeacon(beacon)) {
-                matched.add(region);
-            } else {
-                LogManager.d(TAG, "This region (%s) does not match beacon: %s", region, beacon);
+            // Need to check if region is null in case it was removed from the collection by
+            // another thread during iteration
+            if (region != null) {
+                if (region.matchesBeacon(beacon)) {
+                    matched.add(region);
+                } else {
+                    LogManager.d(TAG, "This region (%s) does not match beacon: %s", region, beacon);
+                }
             }
         }
         return matched;

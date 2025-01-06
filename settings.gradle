@@ -1,4 +1,3 @@
 include ':lib'
-//include ':demo'
-//rootProject.name="android-beacon-library"
-//include ':app'
+project(":").name = "android-beacon-library-root"
+project(":lib").name = "android-beacon-library"

@@ -24,6 +24,7 @@
 package org.altbeacon.beacon.service;
 
 
+import android.Manifest;
 import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -40,9 +41,9 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
-import android.support.annotation.MainThread;
-import android.support.annotation.RestrictTo;
-import android.support.annotation.RestrictTo.Scope;
+import androidx.annotation.MainThread;
+import androidx.annotation.RestrictTo;
+import androidx.annotation.RestrictTo.Scope;
 
 import org.altbeacon.beacon.Beacon;
 import org.altbeacon.beacon.BeaconLocalBroadcastProcessor;
@@ -62,9 +63,9 @@ import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 
 import static android.app.PendingIntent.FLAG_ONE_SHOT;
+import static android.app.PendingIntent.FLAG_IMMUTABLE;
 import static android.app.PendingIntent.getBroadcast;
 
 /**
@@ -172,7 +173,7 @@ public class BeaconService extends Service {
                     }
                 }
                 else if (msg.what == MSG_SYNC_SETTINGS) {
-                    LogManager.i(TAG, "Received settings update from other process");
+                    LogManager.i(TAG, "Received settings update");
                     SettingsData settingsData = SettingsData.fromBundle(msg.getData());
                     if (settingsData != null) {
                         settingsData.apply(service);
@@ -197,6 +198,7 @@ public class BeaconService extends Service {
     @MainThread
     @Override
     public void onCreate() {
+        this.startForegroundIfConfigured();
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             bluetoothCrashResolver = new BluetoothCrashResolver(this);
             bluetoothCrashResolver.start();
@@ -234,9 +236,6 @@ public class BeaconService extends Service {
 
         mScanHelper.reloadParsers();
 
-        DistanceCalculator defaultDistanceCalculator =  new ModelSpecificDistanceCalculator(this, BeaconManager.getDistanceModelUpdateUrl());
-        Beacon.setDistanceCalculator(defaultDistanceCalculator);
-
         // Look for simulated scan data
         try {
             Class klass = Class.forName("org.altbeacon.beacon.SimulatedScanData");
@@ -247,13 +246,12 @@ public class BeaconService extends Service {
         } catch (Exception e) {
             LogManager.e(e, TAG, "Cannot get simulated Scan data.  Make sure your org.altbeacon.beacon.SimulatedScanData class defines a field with the signature 'public static List<Beacon> beacons'");
         }
-        this.startForegroundIfConfigured();
     }
 
 
     private void ensureNotificationProcessorSetup() {
         if (mBeaconNotificationProcessor == null) {
-            mBeaconNotificationProcessor = new BeaconLocalBroadcastProcessor(this);
+            mBeaconNotificationProcessor = BeaconLocalBroadcastProcessor.getInstance(this);
             mBeaconNotificationProcessor.register();
         }
     }
@@ -272,7 +270,13 @@ public class BeaconService extends Service {
                 .getForegroundServiceNotificationId();
         if (notification != null &&
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            this.startForeground(notificationId, notification);
+            try {
+                this.startForeground(notificationId, notification);
+            }
+            catch (SecurityException exception) {
+                // https://issuetracker.google.com/issues/294408576
+                LogManager.w(TAG, "Call to service startForeground() threw a SecurityException.  The Foreground Service for beacon scanning may have started anyway, but this behavior might change in  different conditions or a future Android version.");
+            }
         }
     }
 
@@ -280,7 +284,7 @@ public class BeaconService extends Service {
         String value = null;
         try {
             PackageItemInfo info = this.getPackageManager().getServiceInfo(new ComponentName(this, BeaconService.class), PackageManager.GET_META_DATA);
-            if (info != null && info.metaData != null) {
+            if (info != null && info.metaData != null && info.metaData.get(key) != null) {
                 return info.metaData.get(key).toString();
             }
         }
@@ -359,7 +363,7 @@ public class BeaconService extends Service {
 
     private PendingIntent getRestartIntent() {
         Intent restartIntent = new Intent(getApplicationContext(), StartupBroadcastReceiver.class);
-        return getBroadcast(getApplicationContext(), 1, restartIntent, FLAG_ONE_SHOT);
+        return getBroadcast(getApplicationContext(), 1, restartIntent, FLAG_ONE_SHOT | FLAG_IMMUTABLE);
     }
 
     /**
@@ -370,7 +374,8 @@ public class BeaconService extends Service {
         synchronized (mScanHelper.getRangedRegionState()) {
             if (mScanHelper.getRangedRegionState().containsKey(region)) {
                 LogManager.i(TAG, "Already ranging that region -- will replace existing region.");
-                mScanHelper.getRangedRegionState().remove(region); // need to remove it, otherwise the old object will be retained because they are .equal //FIXME That is not true
+                // Need to explicitly remove because only value is updated for equals keys.
+                mScanHelper.getRangedRegionState().remove(region);
             }
             mScanHelper.getRangedRegionState().put(region, new RangeState(callback));
             LogManager.d(TAG, "Currently ranging %s regions.", mScanHelper.getRangedRegionState().size());

@@ -156,6 +156,16 @@ public class Beacon implements Parcelable, Serializable {
 
     protected int mServiceUuid = -1;
 
+
+    /**
+     * A 128 bit service uuid for the beacon
+     *
+     * This is valid only for GATT-based beacons.   If the beacon is a manufacturer data-based
+     * beacon, this field will be -1
+     */
+
+    protected byte[] mServiceUuid128Bit = {};
+
     /**
      * The Bluetooth device name.  This is a field transmitted by the remote beacon device separate
      * from the advertisement data
@@ -177,6 +187,18 @@ public class Beacon implements Parcelable, Serializable {
     protected boolean mMultiFrameBeacon = false;
 
     /**
+     * The timestamp of the first packet detected in milliseconds.
+     */
+    protected long mFirstCycleDetectionTimestamp = 0L;
+
+    /**
+     * The timestamp of the last packet detected in milliseconds.
+     */
+    protected long mLastCycleDetectionTimestamp = 0L;
+
+    protected byte[] mLastPacketRawBytes = {};
+
+    /**
      * Required for making object Parcelable.  If you override this class, you must provide an
      * equivalent version of this method.
      */
@@ -193,14 +215,21 @@ public class Beacon implements Parcelable, Serializable {
     };
 
     /**
+     * @deprecated Set the distanceCalculatorFactory method on the Settings class
+     * You must define your own factory to co with your DistanceCalculator implementation
+     * that returns a new instance of your DistanceCalculator implementation
      * Sets the DistanceCalculator to use with this beacon
      * @param dc
      */
     public static void setDistanceCalculator(DistanceCalculator dc) {
         sDistanceCalculator = dc;
     }
+    static void setDistanceCalculatorInternal(DistanceCalculator dc) {
+        sDistanceCalculator = dc;
+    }
 
     /**
+     * @deprecated get the distanceCalculatorFactory method on the Settings class
      * Gets the DistanceCalculator to use with this beacon
      */
     public static DistanceCalculator getDistanceCalculator() {
@@ -208,16 +237,19 @@ public class Beacon implements Parcelable, Serializable {
     }
 
     /**
+     * @deprecated Use the method on the Settings class and call `beaconManger.adjustSettings(settings)`
      * Configures whether a the bluetoothAddress (mac address) must be the same for two Beacons
      * to be configured equal.  This setting applies to all beacon instances in the same process.
      * Defaults to false for backward compatibility.
      *
      * @param e
      */
+    @Deprecated
     public static void setHardwareEqualityEnforced(boolean e) {
         sHardwareEqualityEnforced = e;
     }
 
+    @Deprecated
     public static boolean getHardwareEqualityEnforced() {
         return sHardwareEqualityEnforced;
     }
@@ -240,6 +272,13 @@ public class Beacon implements Parcelable, Serializable {
         mBluetoothAddress = in.readString();
         mBeaconTypeCode = in.readInt();
         mServiceUuid = in.readInt();
+        boolean hasServiceUuid128bit = in.readBoolean();
+        if (hasServiceUuid128bit) {
+            mServiceUuid128Bit = new byte[16];
+            for (int i = 0; i < 16; i++) {
+                mServiceUuid128Bit[i]= in.readByte();
+            }
+        }
         int dataSize = in.readInt();
         this.mDataFields = new ArrayList<Long>(dataSize);
         for (int i = 0; i < dataSize; i++) {
@@ -257,6 +296,26 @@ public class Beacon implements Parcelable, Serializable {
         mRunningAverageRssi = (Double) in.readValue(null);
         mRssiMeasurementCount = in.readInt();
         mPacketCount = in.readInt();
+        mFirstCycleDetectionTimestamp = in.readLong();
+        mLastCycleDetectionTimestamp = in.readLong();
+        BeaconManager.setDebug(true);
+
+        byte[] bytes = new byte[62];
+        try {
+            in.readByteArray(bytes); // This sometimes fails even though iterating as below works fine
+        }
+        catch (RuntimeException e) {
+            try {
+                for (int i = 0; i < 62; i++) {
+                    byte b = in.readByte();
+                    bytes[b] = b;
+                }
+            }
+            catch (RuntimeException e2) {
+                // do nothing
+            }
+        }
+        mLastPacketRawBytes = bytes;
     }
 
     /**
@@ -277,10 +336,14 @@ public class Beacon implements Parcelable, Serializable {
         this.mBluetoothAddress = otherBeacon.mBluetoothAddress;
         this.mBeaconTypeCode = otherBeacon.getBeaconTypeCode();
         this.mServiceUuid = otherBeacon.getServiceUuid();
+        this.mServiceUuid128Bit = otherBeacon.getServiceUuid128Bit();
         this.mBluetoothName = otherBeacon.mBluetoothName;
         this.mParserIdentifier = otherBeacon.mParserIdentifier;
         this.mMultiFrameBeacon = otherBeacon.mMultiFrameBeacon;
         this.mManufacturer = otherBeacon.mManufacturer;
+        this.mFirstCycleDetectionTimestamp = otherBeacon.mFirstCycleDetectionTimestamp;
+        this.mLastCycleDetectionTimestamp = otherBeacon.mLastCycleDetectionTimestamp;
+        this.mLastPacketRawBytes = otherBeacon.mLastPacketRawBytes;
     }
 
     /**
@@ -314,6 +377,54 @@ public class Beacon implements Parcelable, Serializable {
      */
     public void setPacketCount(int packetCount) {
         mPacketCount = packetCount;
+    }
+
+    /**
+     * Returns the timestamp of the first packet detected
+     */
+    public long getFirstCycleDetectionTimestamp() {
+        return mFirstCycleDetectionTimestamp;
+    }
+
+    /**
+     * Sets the timestamp of the first packet detected
+     *
+     * @param firstCycleDetectionTimestamp
+     */
+    public void setFirstCycleDetectionTimestamp(long firstCycleDetectionTimestamp) {
+        mFirstCycleDetectionTimestamp = firstCycleDetectionTimestamp;
+    }
+
+    /**
+     * Returns the timestamp of the last packet detected
+     */
+    public long getLastCycleDetectionTimestamp() {
+        return mLastCycleDetectionTimestamp;
+    }
+
+    /**
+     * Sets the timestamp of the last packet detected
+     *
+     * @param lastCycleDetectionTimestamp
+     */
+    public void setLastCycleDetectionTimestamp(long lastCycleDetectionTimestamp) {
+        mLastCycleDetectionTimestamp = lastCycleDetectionTimestamp;
+    }
+
+    /**
+     * Returns the raw bytes of the last detection
+     */
+    public byte[] getLastPacketRawBytes() {
+        return mLastPacketRawBytes;
+    }
+
+    /**
+     * Sets the raw bytes of the last detection
+     *
+     * @param bytes
+     */
+    public void setLastPacketRawBytes(byte[] bytes) {
+        mLastPacketRawBytes = bytes;
     }
 
     /**
@@ -375,6 +486,10 @@ public class Beacon implements Parcelable, Serializable {
      */
     public int getServiceUuid() {
         return mServiceUuid;
+    }
+
+    public byte[] getServiceUuid128Bit() {
+        return mServiceUuid128Bit;
     }
 
     /**
@@ -511,6 +626,10 @@ public class Beacon implements Parcelable, Serializable {
     }
 
     /**
+     * This returns the bluetooth name of the device if detected by the OS
+     * from the advertisement data.  This field will never be populated for apps targeting Android
+     * SDK 31+ unless the app has obtained BLUETOOTH_CONNECT permission, as that permission is a
+     * new requirement from Android to read this field.
      * @see #mBluetoothName
      * @return mBluetoothName
      */
@@ -621,6 +740,13 @@ public class Beacon implements Parcelable, Serializable {
         out.writeString(mBluetoothAddress);
         out.writeInt(mBeaconTypeCode);
         out.writeInt(mServiceUuid);
+        out.writeBoolean(mServiceUuid128Bit.length != 0);
+        if (mServiceUuid128Bit.length != 0) {
+            for (int i = 0; i < 16; i++) {
+                out.writeByte(mServiceUuid128Bit[i]);
+            }
+        }
+
         out.writeInt(mDataFields.size());
         for (Long dataField: mDataFields) {
             out.writeLong(dataField);
@@ -636,6 +762,17 @@ public class Beacon implements Parcelable, Serializable {
         out.writeValue(mRunningAverageRssi);
         out.writeInt(mRssiMeasurementCount);
         out.writeInt(mPacketCount);
+        out.writeLong(mFirstCycleDetectionTimestamp);
+        out.writeLong(mLastCycleDetectionTimestamp);
+        int rawByteCountToWrite = mLastPacketRawBytes.length;
+        if (rawByteCountToWrite > 62) {
+            rawByteCountToWrite = 62;
+        }
+        out.writeByteArray(mLastPacketRawBytes, 0, rawByteCountToWrite);
+        while (rawByteCountToWrite < 62) {
+            out.writeByte((byte) 0x00);
+            rawByteCountToWrite += 1;
+        }
     }
 
     /**
@@ -724,6 +861,7 @@ public class Beacon implements Parcelable, Serializable {
             setRssi(beacon.getRssi());
             setServiceUuid(beacon.getServiceUuid());
             setMultiFrameBeacon(beacon.isMultiFrameBeacon());
+            setLastPacketRawBytes(beacon.getLastPacketRawBytes());
             return this;
         }
 
@@ -823,6 +961,11 @@ public class Beacon implements Parcelable, Serializable {
             return this;
         }
 
+        public Builder setServiceUuid128Bit(byte[] serviceUuid128Bit) {
+            mBeacon.mServiceUuid128Bit = serviceUuid128Bit;
+            return this;
+        }
+
         /**
          * @see Beacon#mBluetoothAddress
          * @param bluetoothAddress
@@ -886,13 +1029,23 @@ public class Beacon implements Parcelable, Serializable {
 
         /**
          * @see Beacon#mMultiFrameBeacon
-         * @return multiFrameBeacon
+         * @param multiFrameBeacon
+         * @return builder
          */
         public Builder setMultiFrameBeacon(boolean multiFrameBeacon) {
             mBeacon.mMultiFrameBeacon = multiFrameBeacon;
             return this;
         }
 
+        /**
+         * @see Beacon#mLastPacketRawBytes
+         * @param lastPacketRawBytes
+         * @return builder
+         */
+        public Builder setLastPacketRawBytes(byte[] lastPacketRawBytes) {
+            mBeacon.mLastPacketRawBytes = lastPacketRawBytes;
+            return this;
+        }
     }
 
 }

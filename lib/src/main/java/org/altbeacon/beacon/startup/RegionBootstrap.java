@@ -30,7 +30,10 @@ import java.util.List;
  * effectively disabling it.  When using the RegionBootstrap, any custom monitoring code must
  * therefore be placed in the callback methods in the BootstrapNotifier implementation passed to the
  * RegionBootstrap.
+ *
+ * @deprecated Will be removed in 3.0.  See http://altbeacon.github.io/android-beacon-library/autobind.html
  */
+@Deprecated
 public class RegionBootstrap {
 
     protected static final String TAG = "AppStarter";
@@ -60,6 +63,9 @@ public class RegionBootstrap {
 
         beaconManager = BeaconManager.getInstanceForApplication(context);
         beaconConsumer = new InternalBeaconConsumer();
+        if (beaconManager.isBackgroundModeUninitialized()) {
+            beaconManager.setBackgroundMode(true);
+        }
         beaconManager.bind(beaconConsumer);
         LogManager.d(TAG, "Waiting for BeaconService connection");
     }
@@ -82,6 +88,9 @@ public class RegionBootstrap {
 
         beaconManager = BeaconManager.getInstanceForApplication(context);
         beaconConsumer = new InternalBeaconConsumer();
+        if (beaconManager.isBackgroundModeUninitialized()) {
+            beaconManager.setBackgroundMode(true);
+        }
         beaconManager.bind(beaconConsumer);
         LogManager.d(TAG, "Waiting for BeaconService connection");
     }
@@ -102,6 +111,9 @@ public class RegionBootstrap {
         this.monitorNotifier = application;
         beaconManager = BeaconManager.getInstanceForApplication(context);
         beaconConsumer = new InternalBeaconConsumer();
+        if (beaconManager.isBackgroundModeUninitialized()) {
+            beaconManager.setBackgroundMode(true);
+        }
         beaconManager.bind(beaconConsumer);
         LogManager.d(TAG, "Waiting for BeaconService connection");
     }
@@ -122,6 +134,9 @@ public class RegionBootstrap {
         this.monitorNotifier = application;
         beaconManager = BeaconManager.getInstanceForApplication(context);
         beaconConsumer = new InternalBeaconConsumer();
+        if (beaconManager.isBackgroundModeUninitialized()) {
+            beaconManager.setBackgroundMode(true);
+        }
         beaconManager.bind(beaconConsumer);
         LogManager.d(TAG, "Waiting for BeaconService connection");
     }
@@ -201,9 +216,6 @@ public class RegionBootstrap {
                 for (Region region : regions) {
                     LogManager.d(TAG, "Background region monitoring activated for region %s", region);
                     beaconManager.startMonitoringBeaconsInRegion(region);
-                    if (beaconManager.isBackgroundModeUninitialized()) {
-                        beaconManager.setBackgroundMode(true);
-                    }
                 }
             } catch (RemoteException e) {
                 LogManager.e(e, TAG, "Can't set up bootstrap regions");

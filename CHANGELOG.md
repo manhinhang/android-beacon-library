@@ -1,3 +1,159 @@
+### 2.21.0-beta4 / 2024-11-16
+
+- Eliminate thrashing of foreground/background mode and ScanJobs during navigation (#1195, VolodaUa)
+- Improved support for beacon layouts based on 128-bit Service UUIDs, (#1212, David G. Young)
+
+### 2.21.0-beta3 / 2024-11-05
+
+- Fix non-Samsung screen off scan failure (#1208, David G. Young)
+- Check for region exits on requestStateforRegion with IntentScanStrategy (#1209, David G. Young) 
+
+### 2.21.0-beta2 / 2024-10-21
+
+- Fix scan dropouts after 10 minutes (#1207, David G. Young)
+
+### 2.21.0-beta1 / 2024-09-01 
+
+- Add new Settings API (#1177, David G. Young) 
+
+### 2.20.7 / 2024-10-09
+
+- Fix intermittent screen off detection failures on Andorid 14 (#1205, David G. Young)
+
+### 2.20.6 / 2024-04-27
+
+- Fix distance calculator overwrite, (#1191, David G. Young)
+- Fix bad model distance config url, (#1190, David G. Young)
+
+### 2.20.5 / 2024-04-05
+
+- Fix crashes creating default RSSI filter. (#1181, Alexandre Assouad)
+
+### 2.20.4 / 2024-02-01
+
+- Fix broken screen-off scans on Android 14, (#1176, David G. Young) 
+
+### 2.20.3 / 2023-11-10
+
+- Backward compatibility - add 'fromScanData' to AltBeaconParser and BeaconParser, (#1153, Andrew Benson)
+
+### 2.20.2 / 2023-10-27
+
+- Fix crash in BroadcastReceiver (#1167, David G. Young)
+
+### 2.20.1 / 2023-10-20
+
+- Additional Android 14 Improvements (#1162, Stephen Ruda)
+- Fix Android 14 foreground service start after BOOT_COMPLETED. (#1165, David G. Young)
+
+### 2.20 / 2023-10-1
+
+- Updates to support Android 14 foreground services. (#1155, David G. Young)
+
+### 2.19.6 / 2023-07-02
+
+- Fix scans being stuck on when Bluetooth turned off in quick settings on
+  Android 9+.  (#1149, David G. Young)
+- Upgrade build tools to use Gradle 8, JDK 17 (#1150, David G. Young)
+- Fix BluetoothMedic crashes on Android 12+ when permissions are missing
+  and depracate medic power cycling no longer working on Android 13
+  (#1121, David G. Young)
+ 
+### 2.19.5 / 2022-12-28
+
+- Expose raw bytes of beacon and accept AD type 0x07 (#1098, David G. Young)
+- Fix Crash on Android 13 beta (#1095, David G. Young)
+- Handle Foreground Service Start Failures in Android 12 (#1090, David G. Young)
+- Fix region persistence usability problems (#1089, David G. Young)
+- Fix bugs with changing BeaconParsers for running scan service (#1091, David G. Young)
+
+### 2.19.4 / 2022-03-10
+
+- Add ApiTrackingLogger (#1078, David G. Young)
+- Allow scanning with only BLUETOOTH_SCAN permission and not just location permissions. (#1065, Marcel Schnelle)
+- Fix bug blocking job scheduler scans on Android 12. (#1077, David G. Young)
+
+### 2.19.3 / 2021-10-5
+
+- Fix failing intent-backed scans broken by Android 12 changes in the 2.19 release. (#1059, David G. Young)
+
+### 2.19.2 / 2021-08-18
+
+- Fix NullPointerException in IntentScanStrategyCoordinator (#1053, PhilipTocsen)
+
+### 2.19.1 / 2021-08-13
+
+- Improve default background mode with autobind (#1051, David G. Young)
+
+### 2.19 / 2021-08-09
+
+- Manual binding/unbinding deprecated.  (#1046, David G. Young)
+- Android 12 changes. (#1043, Nick Badal, David G. Young)
+
+### 2.19-beta5 / 2021-08-01
+
+- Bug fixes to autobind (#1035, David G. Young)
+
+### 2.19-beta4 / 2021-07-10
+
+- Auto start background power saver when using autobind.   Expedite region exits when using intent scan strategy.  (#1035, David G. Young)
+
+### 2.19-beta3 / 2021-07-04
+
+- Add experimental autobind methods for starting beacon ranging/monitoring without a manual call to bind(). (#1035, David G. Young)
+- Add support for beacon parsers based on 128-bit service UUIDs (#1035, David G. Young)
+
+
+### 2.19-beta2 / 2021-06-07
+
+- Add experimental IntentScanStrategy to eliminate a foreground service for some background scan use cases. (#1030, David G. Young)
+- Update service declarations as required for Android 12 (#1033, David G. Young)
+
+### 2.19-beta / 2021-04-28
+
+- Reduce crashes on starting foreground service (#1024, David G. Young)
+- Reduce minSdk to 14 (#1023 David G. Young)
+- Add experimental LiveData interface (#1025, David G. Young)
+
+### 2.18 / 2021-04-14
+
+- Remove dependency on androidx.localbroadcastmanager.content.LocalBroadcastManager (#1022, David G. Young)
+- Redo build scripts and publishing setup for Maven Central due to JCenter sunset (#1022, David G. Young)
+- Prevent internal growth of rangedRegions tracking set  (#922, Oleksandr Vandalko)
+
+### 2.17.1 / 2020-06-11
+
+- Parse multiple manufacturer sections in the advertisement and the scan response to look for beacons.  (#970, David G. Young)
+- Improve HW filter detection mechanism in order to detect beacons immediately after starting in background (#974, Vlad Vladau)
+- Fix crash on BluetoothMedic when started on thread without a looper (#980, David G. Young)
+
+### 2.17 / 2020-04-19
+
+- Make BeaconParser more flexible so as to support covid beacon proposal (#965, David G. Young)
+- Add timestamps of precsely when first and last packet was detected for beacon (#956, Rémi Latapy)
+
+### 2.16.4 / 2020-01-26
+
+- Fix Bluetooth Medic notifications on apps targeting API 26+ (#943 Anu Vakkachen)
+- Fix ConcurrentModificationException crash on background detection reported in #929. (#940, David G. Young)
+- Expedite beacon detections on Samsung when transitionoing from screen on to screen onff (#941, David G. Young)
+
+### 2.16.3 / 2019-09-18
+
+- Fix thread leak with 0 regions and settings applied, (#888, David G. Young)
+- Prevent NPE when ScanState restore hangs or ScanJob thread is slow to start (#890, David G. Young)
+- Prevent crash from IAE when ending scan cycle (#891, David G. Young)
+- Prevent NPE in BluetoothMedic#runScanTest. (#893 Van Hoang Tran)
+
+### 2.16.2 / 2019-05-29
+
+- Prevent crash on alarms going off with a different user active (#886, David G. Young)
+- Fix thread leak caused by scheduling ScanJob when no consumers bound. (#885, David G. Young)
+- Protect against a NPE when changing ranged regions.  (#770, David G. Young)
+- Fix intermittent failed ranging/monitoring callbacks in race conditions. (#842, David G. Young) 
+- Prevent duplicate callbacks on Android 8+ with a foreground service by stopping ScanJob.  (#847, Stephen Ruda)
+- Only apply Samsung-specific non-empty scan filters when the screen is off (#855, Marcel Schnelle)
+
 ### 2.16.1 / 2019-02-10
 
 - Fix crash on starting scanning with a forground service configured when multiple BeaconConsumer

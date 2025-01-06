@@ -6,18 +6,21 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
-import android.support.annotation.AnyThread;
-import android.support.annotation.MainThread;
-import android.support.annotation.NonNull;
-import android.support.annotation.WorkerThread;
+import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
+import androidx.annotation.NonNull;
+import androidx.annotation.WorkerThread;
 
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.logging.LogManager;
@@ -28,7 +31,7 @@ import java.util.Date;
 
 @TargetApi(18)
 public abstract class CycledLeScanner {
-    public static final long ANDROID_N_MAX_SCAN_DURATION_MILLIS = 30 * 60 * 1000l; // 30 minutes
+    public static final long ANDROID_N_MAX_SCAN_DURATION_MILLIS = 10 * 60 * 1000l; // 10 minutes
     private static final String TAG = "CycledLeScanner";
     private BluetoothAdapter mBluetoothAdapter;
 
@@ -52,6 +55,7 @@ public abstract class CycledLeScanner {
     // avoid doing too many scans in a limited time on Android 7.0 or because we are capable of
     // multiple detections.  If true, it indicates scanning needs to be stopped when we finish.
     private boolean mScanningLeftOn = false;
+    private BroadcastReceiver mCancelAlarmOnUserSwitchBroadcastReceiver = null;
 
     protected long mBetweenScanPeriod;
 
@@ -260,7 +264,6 @@ public abstract class CycledLeScanner {
 
         // Remove any postDelayed Runnables queued for the next scan cycle
         mHandler.removeCallbacksAndMessages(null);
-
         // We cannot quit the thread used by the handler until queued Runnables have been processed,
         // because the handler is what stops scanning, and we do not want scanning left on.
         // So we stop the thread using the handler, so we make sure it happens after all other
@@ -273,6 +276,7 @@ public abstract class CycledLeScanner {
                 mScanThread.quit();
             }
         });
+        cleanupCancelAlarmOnUserSwitch();
     }
 
     protected abstract void stopScan();
@@ -298,7 +302,7 @@ public abstract class CycledLeScanner {
                     mScanningPaused = false;
                     try {
                         if (getBluetoothAdapter() != null) {
-                            if (getBluetoothAdapter().isEnabled()) {
+                            if (getBluetoothAdapter().isEnabled() || Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                                 if (mBluetoothCrashResolver != null && mBluetoothCrashResolver.isRecoveryInProgress()) {
                                     LogManager.w(TAG, "Skipping scan because crash recovery is in progress.");
                                 } else {
@@ -388,7 +392,7 @@ public abstract class CycledLeScanner {
             mCycledLeScanCallback.onCycleEnd();
             if (mScanning) {
                 if (getBluetoothAdapter() != null) {
-                    if (getBluetoothAdapter().isEnabled()) {
+                    if (getBluetoothAdapter().isEnabled()  || Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                         // Determine if we need to restart scanning.  Restarting scanning is only
                         // needed on devices incapable of detecting multiple distinct BLE advertising
                         // packets in a single cycle, typically older Android devices (e.g. Nexus 4)
@@ -484,17 +488,45 @@ public abstract class CycledLeScanner {
         if (milliseconds < mScanPeriod) {
             milliseconds = mScanPeriod;
         }
-
         AlarmManager alarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
         alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + milliseconds, getWakeUpOperation());
         LogManager.d(TAG, "Set a wakeup alarm to go off in %s ms: %s", milliseconds, getWakeUpOperation());
+        cancelAlarmOnUserSwitch();
     }
+
+    // Added to prevent crash on switching users.  See #876
+    protected void cancelAlarmOnUserSwitch() {
+        if (mCancelAlarmOnUserSwitchBroadcastReceiver == null) {
+            IntentFilter filter = new IntentFilter();
+            filter.addAction( Intent.ACTION_USER_BACKGROUND );
+            filter.addAction( Intent.ACTION_USER_FOREGROUND );
+
+            mCancelAlarmOnUserSwitchBroadcastReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    LogManager.w(TAG, "User switch detected.  Cancelling alarm to prevent potential crash.");
+                    cancelWakeUpAlarm();
+                }
+            };
+            mContext.registerReceiver(mCancelAlarmOnUserSwitchBroadcastReceiver, filter);
+        }
+    }
+    protected void cleanupCancelAlarmOnUserSwitch() {
+        if (mCancelAlarmOnUserSwitchBroadcastReceiver != null) {
+            try {
+                mContext.unregisterReceiver(mCancelAlarmOnUserSwitchBroadcastReceiver);
+            }
+            catch (IllegalArgumentException e) {} // thrown if OS does not think it was registered
+            mCancelAlarmOnUserSwitchBroadcastReceiver = null;
+        }
+    }
+
 
     protected PendingIntent getWakeUpOperation() {
         if (mWakeUpOperation == null) {
             Intent wakeupIntent = new Intent(mContext, StartupBroadcastReceiver.class);
             wakeupIntent.putExtra("wakeup", true);
-            mWakeUpOperation = PendingIntent.getBroadcast(mContext, 0, wakeupIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            mWakeUpOperation = PendingIntent.getBroadcast(mContext, 0, wakeupIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         }
         return mWakeUpOperation;
     }
@@ -532,6 +564,10 @@ public abstract class CycledLeScanner {
     }
 
     private boolean checkLocationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && checkPermission(Manifest.permission.BLUETOOTH_SCAN)) {
+            return true;
+        }
+
         return checkPermission(Manifest.permission.ACCESS_COARSE_LOCATION) || checkPermission(Manifest.permission.ACCESS_FINE_LOCATION);
     }
 

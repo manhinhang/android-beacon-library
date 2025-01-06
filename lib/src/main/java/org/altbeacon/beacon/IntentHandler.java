@@ -12,8 +12,8 @@ import java.util.Set;
 
 /**
  * Converts internal Intents for ranging/monitoring to notifier callbacks.
- * These may be local broadcast intents from BeaconLocalBroadcastProcessor or
- * global broadcast intents fro BeaconIntentProcessor
+ * These may be direct method calls from BeaconLocalBroadcastProcessor or
+ * global broadcast intents from BeaconIntentProcessor
  *
  * Internal library class.  Do not use directly from outside the library
  *
@@ -21,8 +21,7 @@ import java.util.Set;
  * Created by dyoung on 7/20/17.
  */
 
-/* package private*/
-class IntentHandler {
+public class IntentHandler {
     private static final String TAG = IntentHandler.class.getSimpleName();
     public void convertIntentsToCallbacks(Context context, Intent intent) {
         MonitoringData monitoringData = null;
@@ -56,17 +55,21 @@ class IntentHandler {
             if (dataNotifier != null) {
                 dataNotifier.didRangeBeaconsInRegion(beacons, rangingData.getRegion());
             }
+            if (BeaconManager.getInstanceForApplication(context).isRegionViewModelInitialized(rangingData.getRegion())) {
+                RegionViewModel regionViewModel = BeaconManager.getInstanceForApplication(context).getRegionViewModel(rangingData.getRegion());
+                regionViewModel.getRangedBeacons().postValue(rangingData.getBeacons());
+            }
         }
 
         if (monitoringData != null) {
             LogManager.d(TAG, "got monitoring data");
             Set<MonitorNotifier> notifiers = BeaconManager.getInstanceForApplication(context).getMonitoringNotifiers();
+            Region region = monitoringData.getRegion();
+            Integer state = monitoringData.isInside() ? MonitorNotifier.INSIDE :
+                    MonitorNotifier.OUTSIDE;
             if (notifiers != null) {
                 for(MonitorNotifier notifier : notifiers) {
                     LogManager.d(TAG, "Calling monitoring notifier: %s", notifier);
-                    Region region = monitoringData.getRegion();
-                    Integer state = monitoringData.isInside() ? MonitorNotifier.INSIDE :
-                            MonitorNotifier.OUTSIDE;
                     notifier.didDetermineStateForRegion(state, region);
                     // In case the beacon scanner is running in a separate process, the monitoring
                     // status in this process  will not have been updated yet as a result of this
@@ -79,6 +82,11 @@ class IntentHandler {
                     }
                 }
             }
+            if (BeaconManager.getInstanceForApplication(context).isRegionViewModelInitialized(monitoringData.getRegion())) {
+                RegionViewModel regionViewModel = BeaconManager.getInstanceForApplication(context).getRegionViewModel(monitoringData.getRegion());
+                regionViewModel.getRegionState().postValue(state);
+            }
+
         }
 
     }

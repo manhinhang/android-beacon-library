@@ -46,9 +46,9 @@ public class BeaconParser implements Serializable {
     public static final String URI_BEACON_LAYOUT = "s:0-1=fed8,m:2-2=00,p:3-3:-41,i:4-21v";
     private static final Pattern I_PATTERN = Pattern.compile("i\\:(\\d+)\\-(\\d+)([blv]*)?");
     private static final Pattern M_PATTERN = Pattern.compile("m\\:(\\d+)-(\\d+)\\=([0-9A-Fa-f]+)");
-    private static final Pattern S_PATTERN = Pattern.compile("s\\:(\\d+)-(\\d+)\\=([0-9A-Fa-f]+)");
+    private static final Pattern S_PATTERN = Pattern.compile("s\\:(\\d+)-(\\d+)\\=([0-9A-Fa-f\\-]+)");
     private static final Pattern D_PATTERN = Pattern.compile("d\\:(\\d+)\\-(\\d+)([bl]*)?");
-    private static final Pattern P_PATTERN = Pattern.compile("p\\:(\\d+)\\-(\\d+)\\:?([\\-\\d]+)?");
+    private static final Pattern P_PATTERN = Pattern.compile("p\\:(\\d+)?\\-(\\d+)?\\:?([\\-\\d]+)?");
     private static final Pattern X_PATTERN = Pattern.compile("x");
     private static final char[] HEX_ARRAY = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
     private static final String LITTLE_ENDIAN_SUFFIX = "l";
@@ -68,6 +68,7 @@ public class BeaconParser implements Serializable {
     protected Integer mServiceUuidStartOffset;
     protected Integer mServiceUuidEndOffset;
     protected Long mServiceUuid;
+    protected byte[] mServiceUuid128Bit = {};
     protected Boolean mExtraFrame;
 
     protected Integer mPowerStartOffset;
@@ -167,6 +168,8 @@ public class BeaconParser implements Serializable {
      * @return the BeaconParser instance
      */
     public BeaconParser setBeaconLayout(String beaconLayout) {
+        LogManager.d(TAG, "API setBeaconLayout "+beaconLayout);
+
         mBeaconLayout = beaconLayout;
         Log.d(TAG, "Parsing beacon layout: "+beaconLayout);
 
@@ -207,20 +210,26 @@ public class BeaconParser implements Serializable {
                 }
             }
             matcher = P_PATTERN.matcher(term);
+
             while (matcher.find()) {
                 found = true;
+                String correctionString = "none";
                 try {
-                    int startOffset = Integer.parseInt(matcher.group(1));
-                    int endOffset = Integer.parseInt(matcher.group(2));
+                    if (matcher.group(1) != null && matcher.group(2) != null) {
+                        int startOffset = Integer.parseInt(matcher.group(1));
+                        int endOffset = Integer.parseInt(matcher.group(2));
+                        mPowerStartOffset=startOffset;
+                        mPowerEndOffset=endOffset;
+                    }
+
                     int dBmCorrection = 0;
                     if (matcher.group(3) != null) {
-                        dBmCorrection = Integer.parseInt(matcher.group(3));
+                        correctionString = matcher.group(3);
+                        dBmCorrection = Integer.parseInt(correctionString);
                     }
                     mDBmCorrection=dBmCorrection;
-                    mPowerStartOffset=startOffset;
-                    mPowerEndOffset=endOffset;
                 } catch (NumberFormatException e) {
-                    throw new BeaconLayoutException("Cannot parse integer power byte offset in term: " + term);
+                    throw new BeaconLayoutException("Cannot parse integer power byte offset ("+correctionString+") in term: " + term);
                 }
             }
             matcher = M_PATTERN.matcher(term);
@@ -254,11 +263,31 @@ public class BeaconParser implements Serializable {
                     throw new BeaconLayoutException("Cannot parse integer byte offset in term: " + term);
                 }
                 String hexString = matcher.group(3);
-                try {
-                    mServiceUuid = Long.decode("0x"+hexString);
+                int serviceUuidByteLength = mServiceUuidEndOffset - mServiceUuidStartOffset + 1;
+                if (serviceUuidByteLength == 2) {
+                    try {
+                        mServiceUuid = Long.decode("0x" + hexString);
+                    } catch (NumberFormatException e) {
+                        throw new BeaconLayoutException("Cannot parse serviceUuid: " + hexString + " in term: " + term);
+                    }
+                } else if (serviceUuidByteLength == 16 || serviceUuidByteLength == 4) {
+                    String bytesString = hexString.replace("-", "");
+                    if ((bytesString.length()/2) != serviceUuidByteLength) {
+                        throw new BeaconLayoutException("ServiceUuid specified: "+hexString+" must be "+serviceUuidByteLength+" bytes long but is "+(bytesString.length()/2)+" bytes long in term: " + term);
+                    }
+                    mServiceUuid128Bit = new byte[serviceUuidByteLength];
+                    for (int i = 0; i < serviceUuidByteLength; i++) {
+                        String byteString = bytesString.substring(i*2,i*2+2);
+                        try {
+                            mServiceUuid128Bit[serviceUuidByteLength-i-1] = (byte) Integer.parseInt(byteString, 16);
+                        }
+                        catch (NumberFormatException e) {
+                            throw new BeaconLayoutException("Cannot parse serviceUuid byte "+byteString+" in term: " + term);
+                        }
+                    }
                 }
-                catch (NumberFormatException e) {
-                    throw new BeaconLayoutException("Cannot parse serviceUuid: "+hexString+" in term: " + term);
+                else {
+                    throw new BeaconLayoutException("Cannot parse serviceUuid -- it must be 2, 4 or 16 bytes long: " + hexString + " in term: " + term);
                 }
             }
             matcher = X_PATTERN.matcher(term);
@@ -271,18 +300,6 @@ public class BeaconParser implements Serializable {
                 LogManager.d(TAG, "cannot parse term %s", term);
                 throw new BeaconLayoutException("Cannot parse beacon layout term: " + term);
             }
-        }
-        if (!mExtraFrame) {
-            // extra frames do not have to have identifiers or power fields, but other types do
-            if (mIdentifierStartOffsets.size() == 0 || mIdentifierEndOffsets.size() == 0) {
-                throw new BeaconLayoutException("You must supply at least one identifier offset with a prefix of 'i'");
-            }
-            if (mPowerStartOffset == null || mPowerEndOffset == null) {
-                throw new BeaconLayoutException("You must supply a power byte offset with a prefix of 'p'");
-            }
-        }
-        if (mMatchingBeaconTypeCodeStartOffset == null || mMatchingBeaconTypeCodeEndOffset == null) {
-            throw new BeaconLayoutException("You must supply a matching beacon type expression with a prefix of 'm'");
         }
         mLayoutSize = calculateLayoutSize();
         return this;
@@ -360,6 +377,9 @@ public class BeaconParser implements Serializable {
      * @return
      */
     public Long getMatchingBeaconTypeCode() {
+        if (mMatchingBeaconTypeCode == null) {
+            return -1l;
+        }
         return mMatchingBeaconTypeCode;
     }
 
@@ -368,6 +388,9 @@ public class BeaconParser implements Serializable {
      * @return
      */
     public int getMatchingBeaconTypeCodeStartOffset() {
+        if (mMatchingBeaconTypeCodeStartOffset == null) {
+            return -1;
+        }
         return mMatchingBeaconTypeCodeStartOffset;
     }
 
@@ -376,6 +399,9 @@ public class BeaconParser implements Serializable {
      * @return
      */
     public int getMatchingBeaconTypeCodeEndOffset() {
+        if (mMatchingBeaconTypeCodeEndOffset == null) {
+            return -1;
+        }
         return mMatchingBeaconTypeCodeEndOffset;
     }
 
@@ -387,6 +413,15 @@ public class BeaconParser implements Serializable {
     public Long getServiceUuid() {
         return mServiceUuid;
     }
+
+    /**
+     * @see #mServiceUuid128Bit
+     * @return
+     */
+    public byte[] getServiceUuid128Bit() {
+        return mServiceUuid128Bit;
+    }
+
 
     /**
      * see #mServiceUuidStartOffset
@@ -407,33 +442,58 @@ public class BeaconParser implements Serializable {
 
     /**
      * Construct a Beacon from a Bluetooth LE packet collected by Android's Bluetooth APIs,
-     * including the raw Bluetooth device info
+     * including the raw Bluetooth device info.
+     *
+     * timestampMs excluded for backward compatibility with older api consumers.
+     *
+     * @Deprecated New implementations should not use this method. It is not intended as a public
+     * API and is subject to change or removal in the future.
      *
      * @param scanData The actual packet bytes
      * @param rssi The measured signal strength of the packet
      * @param device The Bluetooth device that was detected
      * @return An instance of a <code>Beacon</code>
      */
+    @Deprecated
     public Beacon fromScanData(byte[] scanData, int rssi, BluetoothDevice device) {
-        return fromScanData(scanData, rssi, device, new Beacon());
+        return fromScanData(scanData, rssi, device, System.currentTimeMillis(), new Beacon());
     }
 
-    protected Beacon fromScanData(byte[] bytesToProcess, int rssi, BluetoothDevice device, Beacon beacon) {
+    /**
+     * Construct a Beacon from a Bluetooth LE packet collected by Android's Bluetooth APIs,
+     * including the raw Bluetooth device info
+     *
+     * @param scanData The actual packet bytes
+     * @param rssi The measured signal strength of the packet
+     * @param device The Bluetooth device that was detected
+     * @param timestampMs The timestamp in milliseconds of the scan execution
+     * @return An instance of a <code>Beacon</code>
+     */
+    public Beacon fromScanData(byte[] scanData, int rssi, BluetoothDevice device, long timestampMs) {
+        return fromScanData(scanData, rssi, device, timestampMs, new Beacon());
+    }
+
+    protected Beacon fromScanData(byte[] bytesToProcess, int rssi, BluetoothDevice device, long timestampMs, Beacon beacon) {
         BleAdvertisement advert = new BleAdvertisement(bytesToProcess);
-        boolean parseFailed = false;
-        Pdu pduToParse = null;
+        boolean parseSucceeded = false;
+        ArrayList<Pdu> pdusToParse = new ArrayList<Pdu>();
         int startByte = 0;
         ArrayList<Identifier> identifiers = new ArrayList<Identifier>();
         ArrayList<Long> dataFields = new ArrayList<Long>();
+        int txPower = 0;
+
 
         for (Pdu pdu: advert.getPdus()) {
-            if (pdu.getType() == Pdu.GATT_SERVICE_UUID_PDU_TYPE ||
-                    pdu.getType() == Pdu.MANUFACTURER_DATA_PDU_TYPE) {
-                pduToParse = pdu;
+            if ((pdu.getType() == Pdu.GATT_SERVICE_DATA_UUID_16_BIT_AD_TYPE && mServiceUuid != null) ||
+                (pdu.getType() == Pdu.GATT_SERVICE_DATA_UUID_128_BIT_AD_TYPE && mServiceUuid128Bit.length == 16)  ||
+                (pdu.getType() == Pdu.GATT_SERVICE_DATA_UUID_32_BIT_AD_TYPE && mServiceUuid128Bit.length == 4)  ||
+                (pdu.getType() == Pdu.GATT_SERVICE_COMPLETE_UUID_128_BIT_AD_TYPE && mServiceUuid128Bit.length == 16)  ||
+                pdu.getType() == Pdu.MANUFACTURER_DATA_AD_TYPE) {
+
+                pdusToParse.add(pdu);
                 if (LogManager.isVerboseLoggingEnabled()) {
                     LogManager.d(TAG, "Processing pdu type %02X: %s with startIndex: %d, endIndex: %d", pdu.getType(), bytesToHex(bytesToProcess), pdu.getStartIndex(), pdu.getEndIndex());
                 }
-                break;
             }
             else {
                 if (LogManager.isVerboseLoggingEnabled()) {
@@ -441,153 +501,203 @@ public class BeaconParser implements Serializable {
                 }
             }
         }
-        if (pduToParse == null) {
+        if (pdusToParse.size() == 0) {
             if (LogManager.isVerboseLoggingEnabled()) {
                 LogManager.d(TAG, "No PDUs to process in this packet.");
             }
-            parseFailed = true;
         }
         else {
-            byte[] serviceUuidBytes = null;
-            byte[] typeCodeBytes = longToByteArray(getMatchingBeaconTypeCode(), mMatchingBeaconTypeCodeEndOffset - mMatchingBeaconTypeCodeStartOffset + 1);
-            if (getServiceUuid() != null) {
-                serviceUuidBytes = longToByteArray(getServiceUuid(), mServiceUuidEndOffset - mServiceUuidStartOffset + 1, false);
-            }
-            startByte = pduToParse.getStartIndex();
-            boolean patternFound = false;
-
-            if (getServiceUuid() == null) {
-                if (byteArraysMatch(bytesToProcess, startByte + mMatchingBeaconTypeCodeStartOffset, typeCodeBytes)) {
-                    patternFound = true;
+            boolean parseFailed = false;
+            for (Pdu pduToParse : pdusToParse) {
+                byte[] serviceUuidBytes = null;
+                byte[] typeCodeBytes = {};
+                if (mMatchingBeaconTypeCodeEndOffset != null && mMatchingBeaconTypeCodeStartOffset >= 0) {
+                    typeCodeBytes = longToByteArray(getMatchingBeaconTypeCode(), mMatchingBeaconTypeCodeEndOffset - mMatchingBeaconTypeCodeStartOffset + 1);
                 }
-            } else {
-                if (byteArraysMatch(bytesToProcess, startByte + mServiceUuidStartOffset, serviceUuidBytes) &&
-                        byteArraysMatch(bytesToProcess, startByte + mMatchingBeaconTypeCodeStartOffset, typeCodeBytes)) {
-                    patternFound = true;
+                serviceUuidBytes = getServiceUuid128Bit();
+                if (getServiceUuid() != null) {
+                    serviceUuidBytes = longToByteArray(getServiceUuid(), mServiceUuidEndOffset - mServiceUuidStartOffset + 1, false);
                 }
-            }
+                startByte = pduToParse.getStartIndex();
+                boolean patternFound = false;
 
-            if (patternFound == false) {
-                // This is not a beacon
-                if (getServiceUuid() == null) {
-                    if (LogManager.isVerboseLoggingEnabled()) {
-                        LogManager.d(TAG, "This is not a matching Beacon advertisement. (Was expecting %s.  "
-                                        + "The bytes I see are: %s", byteArrayToString(typeCodeBytes),
-                                bytesToHex(bytesToProcess));
+                if (serviceUuidBytes.length == 0) {
+                    if (mMatchingBeaconTypeCodeEndOffset != null) {
+                        if (byteArraysMatch(bytesToProcess, startByte + mMatchingBeaconTypeCodeStartOffset, typeCodeBytes)) {
+                            patternFound = true;
+                        }
+                    }
+                }
+                else {
+                    boolean lengthIsExpected = false;
+                    if (pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_128_BIT_AD_TYPE) {
+                        if (serviceUuidBytes.length == 16) {
+                            lengthIsExpected = true;
+                        }
+                    }
+                    if (pduToParse.getType() == Pdu.GATT_SERVICE_COMPLETE_UUID_128_BIT_AD_TYPE) {
+                        if (serviceUuidBytes.length == 16) {
+                            lengthIsExpected = true;
+                        }
+                    }
+                    if (pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_16_BIT_AD_TYPE) {
+                        if (serviceUuidBytes.length == 2) {
+                            lengthIsExpected = true;
+                        }
+                    }
+                    if (pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_32_BIT_AD_TYPE) {
+                        if (serviceUuidBytes.length == 4) {
+                            lengthIsExpected = true;
+                        }
+                    }
+                    if (lengthIsExpected) {
+                        if (byteArraysMatch(bytesToProcess, startByte + mServiceUuidStartOffset, serviceUuidBytes)) {
+                            if (mMatchingBeaconTypeCodeEndOffset != null) {
+                                if (byteArraysMatch(bytesToProcess, startByte + mMatchingBeaconTypeCodeStartOffset, typeCodeBytes)) {
+                                    patternFound = true;
+                                }
+                            }
+                            else {
+                                if (pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_16_BIT_AD_TYPE || pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_128_BIT_AD_TYPE || pduToParse.getType() == Pdu.GATT_SERVICE_DATA_UUID_32_BIT_AD_TYPE || pduToParse.getType() == Pdu.GATT_SERVICE_COMPLETE_UUID_128_BIT_AD_TYPE) {
+                                    patternFound = true;
+                                }
+                            }
 
+                        }
+                    }
+                }
+
+                if (patternFound == false) {
+                    // This is not a beacon
+                    if (getServiceUuid() != null || getServiceUuid128Bit().length != 0) {
+                        if (LogManager.isVerboseLoggingEnabled()) {
+                            int offset = 0;
+                            if (mMatchingBeaconTypeCodeStartOffset != null) {
+                                offset = mMatchingBeaconTypeCodeStartOffset;
+                            }
+                            LogManager.d(TAG, "This is not a matching Beacon advertisement. Was expecting %s at offset %d and %s at offset %d.  "
+                                            + "The bytes I see are: %s",
+                                    byteArrayToString(serviceUuidBytes),
+                                    startByte + mServiceUuidStartOffset,
+                                    byteArrayToString(typeCodeBytes),
+                                    startByte + offset,
+                                    bytesToHex(bytesToProcess));
+                        }
+                    }
+                    else {
+                        if (LogManager.isVerboseLoggingEnabled()) {
+                            LogManager.d(TAG, "This is not a matching Beacon advertisement. (Was expecting %s.  "
+                                            + "The bytes I see are: %s", byteArrayToString(typeCodeBytes),
+                                    bytesToHex(bytesToProcess));
+
+                        }
                     }
                 } else {
                     if (LogManager.isVerboseLoggingEnabled()) {
-                        LogManager.d(TAG, "This is not a matching Beacon advertisement. Was expecting %s at offset %d and %s at offset %d.  "
-                                        + "The bytes I see are: %s",
-                                byteArrayToString(serviceUuidBytes),
-                                startByte + mServiceUuidStartOffset,
-                                byteArrayToString(typeCodeBytes),
-                                startByte + mMatchingBeaconTypeCodeStartOffset,
-                                bytesToHex(bytesToProcess));
-                    }
-                }
-                parseFailed = true;
-                beacon =  null;
-            } else {
-                if (LogManager.isVerboseLoggingEnabled()) {
-                    LogManager.d(TAG, "This is a recognized beacon advertisement -- %s seen",
-                            byteArrayToString(typeCodeBytes));
-                    LogManager.d(TAG, "Bytes are: %s", bytesToHex(bytesToProcess));
-                }
-            }
-
-            if (patternFound) {
-                if (bytesToProcess.length <= startByte+mLayoutSize && mAllowPduOverflow) {
-                    // If the layout size is bigger than this PDU, and we allow overflow.  Make sure
-                    // the byte buffer is big enough by zero padding the end so we don't try to read
-                    // outside the byte array of the advertisement
-                    if (LogManager.isVerboseLoggingEnabled()) {
-                        LogManager.d(TAG, "Expanding buffer because it is too short to parse: "+bytesToProcess.length+", needed: "+(startByte+mLayoutSize));
-                    }
-                    bytesToProcess = ensureMaxSize(bytesToProcess, startByte+mLayoutSize);
-                }
-                for (int i = 0; i < mIdentifierEndOffsets.size(); i++) {
-                    int endIndex = mIdentifierEndOffsets.get(i) + startByte;
-
-                    if (endIndex > pduToParse.getEndIndex() && mIdentifierVariableLengthFlags.get(i)) {
-                        if (LogManager.isVerboseLoggingEnabled()) {
-                            LogManager.d(TAG, "Need to truncate identifier by "+(endIndex-pduToParse.getEndIndex()));
-                        }
-                        // If this is a variable length identifier, we truncate it to the size that
-                        // is available in the packet
-                        int start = mIdentifierStartOffsets.get(i) + startByte;
-                        int end = pduToParse.getEndIndex()+1;
-                        if (end <= start) {
-                            LogManager.d(TAG, "PDU is too short for identifer.  Packet is malformed");
-                            return null;
-                        }
-                        Identifier identifier = Identifier.fromBytes(bytesToProcess, start, end, mIdentifierLittleEndianFlags.get(i));
-                        identifiers.add(identifier);
-                    }
-                    else if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
-                        parseFailed = true;
-                        if (LogManager.isVerboseLoggingEnabled()) {
-                            LogManager.d(TAG, "Cannot parse identifier "+i+" because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex());
-                        }
-                    }
-                    else {
-                        Identifier identifier = Identifier.fromBytes(bytesToProcess, mIdentifierStartOffsets.get(i) + startByte, endIndex+1, mIdentifierLittleEndianFlags.get(i));
-                        identifiers.add(identifier);
-                    }
-                }
-                for (int i = 0; i < mDataEndOffsets.size(); i++) {
-                    int endIndex = mDataEndOffsets.get(i) + startByte;
-                    if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
-                        if (LogManager.isVerboseLoggingEnabled()) {
-                            LogManager.d(TAG, "Cannot parse data field "+i+" because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex()+".  Setting value to 0");
-                        }
-                        dataFields.add(new Long(0l));
-                    }
-                    else {
-                        String dataString = byteArrayToFormattedString(bytesToProcess, mDataStartOffsets.get(i) + startByte, endIndex, mDataLittleEndianFlags.get(i));
-                        dataFields.add(Long.decode(dataString));
+                        LogManager.d(TAG, "This is a recognized beacon advertisement -- %s seen",
+                                byteArrayToString(typeCodeBytes));
+                        LogManager.d(TAG, "Bytes are: %s", bytesToHex(bytesToProcess));
                     }
                 }
 
-                if (mPowerStartOffset != null) {
-                    int endIndex = mPowerEndOffset + startByte;
-                    int txPower = 0;
-                    try {
-                        if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
+                if (patternFound) {
+                    if (bytesToProcess.length <= startByte+mLayoutSize && mAllowPduOverflow) {
+                        // If the layout size is bigger than this PDU, and we allow overflow.  Make sure
+                        // the byte buffer is big enough by zero padding the end so we don't try to read
+                        // outside the byte array of the advertisement
+                        if (LogManager.isVerboseLoggingEnabled()) {
+                            LogManager.d(TAG, "Expanding buffer because it is too short to parse: "+bytesToProcess.length+", needed: "+(startByte+mLayoutSize));
+                        }
+                        bytesToProcess = ensureMaxSize(bytesToProcess, startByte+mLayoutSize);
+                    }
+                    for (int i = 0; i < mIdentifierEndOffsets.size(); i++) {
+                        int endIndex = mIdentifierEndOffsets.get(i) + startByte;
+
+                        if (endIndex > pduToParse.getEndIndex() && mIdentifierVariableLengthFlags.get(i)) {
+                            if (LogManager.isVerboseLoggingEnabled()) {
+                                LogManager.d(TAG, "Need to truncate identifier by "+(endIndex-pduToParse.getEndIndex()));
+                            }
+                            // If this is a variable length identifier, we truncate it to the size that
+                            // is available in the packet
+                            int start = mIdentifierStartOffsets.get(i) + startByte;
+                            int end = pduToParse.getEndIndex()+1;
+                            if (end <= start) {
+                                LogManager.d(TAG, "PDU is too short for identifer.  Packet is malformed");
+                                return null;
+                            }
+                            Identifier identifier = Identifier.fromBytes(bytesToProcess, start, end, mIdentifierLittleEndianFlags.get(i));
+                            identifiers.add(identifier);
+                        }
+                        else if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
                             parseFailed = true;
                             if (LogManager.isVerboseLoggingEnabled()) {
-                                LogManager.d(TAG, "Cannot parse power field because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex());
+                                LogManager.d(TAG, "Cannot parse identifier "+i+" because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex());
                             }
                         }
                         else {
-                            String powerString = byteArrayToFormattedString(bytesToProcess, mPowerStartOffset + startByte, mPowerEndOffset + startByte, false);
-                            txPower = Integer.parseInt(powerString)+mDBmCorrection;
-                            // make sure it is a signed integer
-                            if (txPower > 127) {
-                                txPower -= 256;
-                            }
-                            beacon.mTxPower = txPower;
+                            Identifier identifier = Identifier.fromBytes(bytesToProcess, mIdentifierStartOffsets.get(i) + startByte, endIndex+1, mIdentifierLittleEndianFlags.get(i));
+                            identifiers.add(identifier);
                         }
                     }
-                    catch (NumberFormatException e1) {
-                        // keep default value
+                    for (int i = 0; i < mDataEndOffsets.size(); i++) {
+                        int endIndex = mDataEndOffsets.get(i) + startByte;
+                        if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
+                            if (LogManager.isVerboseLoggingEnabled()) {
+                                LogManager.d(TAG, "Cannot parse data field "+i+" because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex()+".  Setting value to 0");
+                            }
+                            dataFields.add(new Long(0l));
+                        }
+                        else {
+                            String dataString = byteArrayToFormattedString(bytesToProcess, mDataStartOffsets.get(i) + startByte, endIndex, mDataLittleEndianFlags.get(i));
+                            dataFields.add(Long.decode(dataString));
+                        }
                     }
-                    catch (NullPointerException e2) {
-                        // keep default value
+
+                    if (mPowerStartOffset != null) {
+                        int endIndex = mPowerEndOffset + startByte;
+                        try {
+                            if (endIndex > pduToParse.getEndIndex() && !mAllowPduOverflow) {
+                                parseFailed = true;
+                                if (LogManager.isVerboseLoggingEnabled()) {
+                                    LogManager.d(TAG, "Cannot parse power field because PDU is too short.  endIndex: " + endIndex + " PDU endIndex: " + pduToParse.getEndIndex());
+                                }
+                            }
+                            else {
+                                String powerString = byteArrayToFormattedString(bytesToProcess, mPowerStartOffset + startByte, mPowerEndOffset + startByte, false);
+                                txPower = Integer.parseInt(powerString)+mDBmCorrection;
+                                // make sure it is a signed integer
+                                if (txPower > 127) {
+                                    txPower -= 256;
+                                }
+                            }
+                        }
+                        catch (NumberFormatException e1) {
+                            // keep default value
+                        }
+                        catch (NullPointerException e2) {
+                            // keep default value
+                        }
+                    }
+                    else {
+                        if (mDBmCorrection != null) {
+                            txPower = mDBmCorrection;
+                        }
+                    }
+                    if (!parseFailed) {
+                        parseSucceeded = true;
+                        // exit processing PDUs on the first beacon we find.  Only one beacon per advertisement!
+                        break;
                     }
                 }
             }
         }
 
-        if (parseFailed) {
-            beacon = null;
-        }
-        else {
-            int beaconTypeCode = 0;
-            String beaconTypeString = byteArrayToFormattedString(bytesToProcess, mMatchingBeaconTypeCodeStartOffset+startByte, mMatchingBeaconTypeCodeEndOffset+startByte, false);
-            beaconTypeCode = Integer.parseInt(beaconTypeString);
-            // TODO: error handling needed on the parse
+        if (parseSucceeded) {
+            int beaconTypeCode = -1;
+            if (mMatchingBeaconTypeCodeEndOffset != null) {
+                String beaconTypeString = byteArrayToFormattedString(bytesToProcess, mMatchingBeaconTypeCodeStartOffset+startByte, mMatchingBeaconTypeCodeEndOffset+startByte, false);
+                beaconTypeCode = Integer.parseInt(beaconTypeString);
+            }
 
             int manufacturer = 0;
             String manufacturerString = byteArrayToFormattedString(bytesToProcess, startByte, startByte+1, true);
@@ -597,7 +707,12 @@ public class BeaconParser implements Serializable {
             String name = null;
             if (device != null) {
                 macAddress = device.getAddress();
-                name = device.getName();
+                try {
+                  name = device.getName();
+                }
+                catch (SecurityException e) {
+                  LogManager.d(TAG,"Cannot read device name without Manifest.permission.BLUETOOTH_CONNECT");
+                }
             }
 
             beacon.mIdentifiers = identifiers;
@@ -616,8 +731,15 @@ public class BeaconParser implements Serializable {
             beacon.mManufacturer = manufacturer;
             beacon.mParserIdentifier = mIdentifier;
             beacon.mMultiFrameBeacon = extraParsers.size() > 0 || mExtraFrame;
+            beacon.mFirstCycleDetectionTimestamp = timestampMs;
+            beacon.mLastCycleDetectionTimestamp = timestampMs;
+            beacon.mLastPacketRawBytes = bytesToProcess;
+            beacon.mTxPower = txPower;
+            return beacon;
         }
-        return beacon;
+        else {
+            return null;
+        }
     }
 
     /**
@@ -663,13 +785,22 @@ public class BeaconParser implements Serializable {
         }
         lastIndex += adjustedIdentifiersLength;
 
-        advertisingBytes = new byte[lastIndex+1-2];
-        long beaconTypeCode = this.getMatchingBeaconTypeCode();
+        int serviceUuidByteLength = 0;
 
-        // set type code
-        for (int index = this.mMatchingBeaconTypeCodeStartOffset; index <= this.mMatchingBeaconTypeCodeEndOffset; index++) {
-            byte value = (byte) (this.getMatchingBeaconTypeCode() >> (8*(this.mMatchingBeaconTypeCodeEndOffset-index)) & 0xff);
-            advertisingBytes[index-2] = value;
+        int prefixLength = 2; // 2 bytes for manufacturer code and 16 bit service uuid
+        if (mServiceUuid128Bit != null && mServiceUuid128Bit.length > 0) {
+            serviceUuidByteLength = mServiceUuidEndOffset - mServiceUuidStartOffset + 1;
+            prefixLength = serviceUuidByteLength; // 4/16 bytes for 32/128 bit service uuid serviceUuid
+        }
+
+        advertisingBytes = new byte[lastIndex+1-prefixLength];
+        if (mMatchingBeaconTypeCodeEndOffset != null) {
+            long beaconTypeCode = this.getMatchingBeaconTypeCode();
+            // set type code
+            for (int index = this.mMatchingBeaconTypeCodeStartOffset; index <= this.mMatchingBeaconTypeCodeEndOffset; index++) {
+                byte value = (byte) (this.getMatchingBeaconTypeCode() >> (8*(this.mMatchingBeaconTypeCodeEndOffset-index)) & 0xff);
+                advertisingBytes[index-prefixLength] = value;
+            }
         }
 
         // set identifiers
@@ -709,15 +840,14 @@ public class BeaconParser implements Serializable {
                 LogManager.d(TAG, "Identifier size is just right: "+byteArrayToString(identifierBytes));
             }
             for (int index = this.mIdentifierStartOffsets.get(identifierNum); index <= this.mIdentifierStartOffsets.get(identifierNum)+identifierBytes.length-1; index ++) {
-                advertisingBytes[index-2] = (byte) identifierBytes[index-this.mIdentifierStartOffsets.get(identifierNum)];
+                advertisingBytes[index-prefixLength] = (byte) identifierBytes[index-this.mIdentifierStartOffsets.get(identifierNum)];
             }
         }
 
         // set power
-
-        if (this.mPowerStartOffset != null && this.mPowerEndOffset != null) {
+        if (this.mPowerStartOffset != null && this.mPowerEndOffset != null  && this.mPowerStartOffset >= 2) {
             for (int index = this.mPowerStartOffset; index <= this.mPowerEndOffset; index ++) {
-                advertisingBytes[index-2] = (byte) (beacon.getTxPower() >> (8*(index - this.mPowerStartOffset)) & 0xff);
+                advertisingBytes[index-prefixLength] = (byte) (beacon.getTxPower() >> (8*(index - this.mPowerStartOffset)) & 0xff);
             }
         }
 
@@ -730,7 +860,7 @@ public class BeaconParser implements Serializable {
                 if (!this.mDataLittleEndianFlags.get(dataFieldNum)) {
                     endianCorrectedIndex = dataFieldLength-index;
                 }
-                advertisingBytes[this.mDataStartOffsets.get(dataFieldNum)-2+endianCorrectedIndex] = (byte) (dataField >> (8*index) & 0xff);
+                advertisingBytes[this.mDataStartOffsets.get(dataFieldNum)-prefixLength+endianCorrectedIndex] = (byte) (dataField >> (8*index) & 0xff);
             }
         }
         return advertisingBytes;
@@ -927,6 +1057,7 @@ public class BeaconParser implements Serializable {
                 mServiceUuidStartOffset,
                 mServiceUuidEndOffset,
                 mServiceUuid,
+                mServiceUuid128Bit,
                 mExtraFrame,
                 mPowerStartOffset,
                 mPowerEndOffset,
@@ -953,6 +1084,29 @@ public class BeaconParser implements Serializable {
         }
         catch (ClassCastException e ) { }
         return false;
+    }
+
+    @Override
+    public String toString() {
+        if (mIdentifier == null) {
+            return mBeaconLayout;
+        }
+        return mIdentifier + "~" + mBeaconLayout;
+    }
+
+    /**
+     * Creates a BeaconParser instance from a string in the format <identifier>~<layout>
+     * @param string the string to parse
+     * @return BeaconParser
+     */
+    public static BeaconParser fromString(String string) {
+        String[] parts = string.split("~");
+        if (parts.length != 2) {
+            return new BeaconParser().setBeaconLayout(string);
+        }
+        String identifier = parts[0];
+        String layout = parts[1];
+        return new BeaconParser(identifier).setBeaconLayout(layout);
     }
 
 }

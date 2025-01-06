@@ -26,7 +26,7 @@ import java.util.Set;
 import static android.content.Context.MODE_PRIVATE;
 
 /**
- * Stores the full state of scanning for the libary, including all settings so it can be ressurrected easily
+ * Stores the full state of scanning for the library, including all settings so it can be ressurrected easily
  * for running from a scheduled job
  *
  * Created by dyoung on 3/26/17.
@@ -193,17 +193,6 @@ public class ScanState implements Serializable {
                 outputStream = mContext.openFileOutput(TEMP_STATUS_PRESERVATION_FILE_NAME, MODE_PRIVATE);
                 objectOutputStream = new ObjectOutputStream(outputStream);
                 objectOutputStream.writeObject(this);
-                File file = new File(mContext.getFilesDir(), STATUS_PRESERVATION_FILE_NAME);
-                File tempFile = new File(mContext.getFilesDir(), TEMP_STATUS_PRESERVATION_FILE_NAME);
-                LogManager.d(TAG, "Temp file is "+tempFile.getAbsolutePath());
-                LogManager.d(TAG, "Perm file is "+file.getAbsolutePath());
-
-                if (!file.delete()) {
-                    LogManager.e(TAG, "Error while saving scan status to file: Cannot delete existing file.");
-                }
-                if (!tempFile.renameTo(file)) {
-                    LogManager.e(TAG, "Error while saving scan status to file: Cannot rename temp file.");
-                }
             } catch (IOException e) {
                 LogManager.e(TAG, "Error while saving scan status to file: ", e.getMessage());
             } finally {
@@ -220,7 +209,21 @@ public class ScanState implements Serializable {
                     }
                 }
             }
+
+            File file = new File(mContext.getFilesDir(), STATUS_PRESERVATION_FILE_NAME);
+            File tempFile = new File(mContext.getFilesDir(), TEMP_STATUS_PRESERVATION_FILE_NAME);
+            LogManager.d(TAG, "Temp file is "+tempFile.getAbsolutePath());
+            LogManager.d(TAG, "Perm file is "+file.getAbsolutePath());
+
+            if (!file.delete()) {
+                LogManager.e(TAG, "Error while saving scan status to file: Cannot delete existing file.");
+            }
+            if (!tempFile.renameTo(file)) {
+                LogManager.e(TAG, "Error while saving scan status to file: Cannot rename temp file.");
+            }
+
             mMonitoringStatus.saveMonitoringStatusIfOn();
+
         }
     }
 
@@ -278,6 +281,14 @@ public class ScanState implements Serializable {
             if (!existingRangedRegions.contains(newRangedRegion)) {
                 LogManager.d(TAG, "Starting ranging region: "+newRangedRegion);
                 mRangedRegionState.put(newRangedRegion, new RangeState(new Callback(mContext.getPackageName())));
+            }
+            else {
+                // In case the user has changed the definition, update it.
+                Region existingRegion = existingRangedRegions.get(existingRangedRegions.indexOf(newRangedRegion));
+                if (newRangedRegion.hasSameIdentifiers(existingRegion)) {
+                    mRangedRegionState.remove(existingRegion);
+                    mRangedRegionState.put(newRangedRegion, new RangeState(new Callback(mContext.getPackageName())));
+                }
             }
         }
         for (Region existingRangedRegion: existingRangedRegions) {

@@ -7,21 +7,23 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
 import android.os.ParcelUuid;
+import android.os.PowerManager;
 import android.os.SystemClock;
-import android.support.annotation.MainThread;
-import android.support.annotation.WorkerThread;
-import android.support.v4.content.LocalBroadcastManager;
+import androidx.annotation.MainThread;
+import androidx.annotation.WorkerThread;
 
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.logging.LogManager;
 import org.altbeacon.beacon.service.DetectionTracker;
 import org.altbeacon.bluetooth.BluetoothCrashResolver;
+import org.altbeacon.bluetooth.BluetoothMedic;
 
-import java.security.Security;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,10 +37,13 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
     private long mBackgroundLScanFirstDetectionTime = 0;
     private boolean mMainScanCycleActive = false;
     private final BeaconManager mBeaconManager;
+    private final PowerManager mPowerManager;
+    private boolean mScanningStarted = false;
 
     public CycledLeScannerForLollipop(Context context, long scanPeriod, long betweenScanPeriod, boolean backgroundFlag, CycledLeScanCallback cycledLeScanCallback, BluetoothCrashResolver crashResolver) {
         super(context, scanPeriod, betweenScanPeriod, backgroundFlag, cycledLeScanCallback, crashResolver);
         mBeaconManager = BeaconManager.getInstanceForApplication(mContext);
+        mPowerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
     }
 
     @Override
@@ -164,7 +169,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
 
     @Override
     protected void startScan() {
-        if (!isBluetoothOn()) {
+        if (!isBluetoothOn() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             LogManager.d(TAG, "Not starting scan because bluetooth is off");
             return;
         }
@@ -187,17 +192,27 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             // We only add these filters on 8.1+ devices, because adding scan filters has been reported
             // to cause scan failures on some Samsung devices with Android 5.x
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                if (Build.MANUFACTURER.equalsIgnoreCase("samsung")) {
-                    // On the Samsung Galaxy Note 8.1, scans are blocked with screen off when the
-                    // scan filter is empty (wildcard).  We do a more detailed filter on Samsung only
-                    // because it might block detections of AltBeacon packets with non-standard
+                if ((Build.MANUFACTURER.equalsIgnoreCase("samsung") ||
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) &&
+                        !mPowerManager.isInteractive()) {
+                    // On the Samsung 8.1 and Android 14.0, scans are blocked with screen off when the
+                    // scan filter is empty (wildcard).  We do a more detailed filter on such devices
+                    // only because it might block detections of AltBeacon packets with non-standard
                     // manufacturer codes.  See #769 for details.
-                    LogManager.d(TAG, "Using a non-empty scan filter since this is Samsung 8.1+");
+                    LogManager.d(TAG, "Using a non-empty scan filter since this is 14.0 or Samsung 8.1+");
                     filters = new ScanFilterUtils().createScanFiltersForBeaconParsers(
                             mBeaconManager.getBeaconParsers());
                 }
                 else {
-                    LogManager.d(TAG, "Using an empty scan filter since this is 8.1+ on Non-Samsung");
+                    if (Build.MANUFACTURER.equalsIgnoreCase("samsung") ||
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        LogManager.d(TAG, "Using a wildcard scan filter because the screen is on.  We will switch to a non-empty filter if the screen goes off");
+                        // as soon as the screen goes off we will need to start a different scan
+                        // that has scan filters
+                        IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+                        mContext.getApplicationContext().registerReceiver(mScreenOffReceiver, filter);
+                        LogManager.d(TAG, "registering ScreenOffReceiver "+mScreenOffReceiver);
+                    }
                     // The wildcard filter matches everything.
                     filters = new ScanFilterUtils().createWildcardScanFilters();
                 }
@@ -210,6 +225,14 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
         if (settings != null) {
             postStartLeScan(filters, settings);
         }
+    }
+
+    @MainThread
+    public void stop() {
+        super.stop();
+        LogManager.d(TAG, "unregistering ScreenOffReceiver as we stop the cycled scanner");
+        // Catch the exception in case it has not been registered
+        try { mContext.getApplicationContext().unregisterReceiver(mScreenOffReceiver); } catch (IllegalArgumentException e) {}
     }
 
     @Override
@@ -231,7 +254,13 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             @Override
             public void run() {
                 try {
+                    if (mScanningStarted) {
+                        LogManager.d(TAG, "Scanning already started stopping to avoid start failure.");
+                        scanner.stopScan(scanCallback);
+                        mScanningStarted = false;
+                    }
                     scanner.startScan(filters, settings, scanCallback);
+                    mScanningStarted = true;
                 } catch (IllegalStateException e) {
                     LogManager.w(TAG, "Cannot start scan. Bluetooth may be turned off.");
                 } catch (NullPointerException npe) {
@@ -239,7 +268,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                     LogManager.e(npe, TAG, "Cannot start scan. Unexpected NPE.");
                 } catch (SecurityException e) {
                     // Thrown by Samsung Knox devices if bluetooth access denied for an app
-                    LogManager.e(TAG, "Cannot start scan.  Security Exception");
+                    LogManager.e(TAG, "Cannot start scan.  Security Exception: "+e.getMessage(), e);
                 }
 
             }
@@ -247,7 +276,8 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
     }
 
     private void postStopLeScan() {
-        if (!isBluetoothOn()){
+        if (!isBluetoothOn() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P){
+            mScanningStarted = false;
             LogManager.d(TAG, "Not stopping scan because bluetooth is off");
             return;
         }
@@ -263,6 +293,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             public void run() {
                 try {
                     LogManager.d(TAG, "Stopping LE scan on scan handler");
+                    mScanningStarted = false;
                     scanner.stopScan(scanCallback);
                 } catch (IllegalStateException e) {
                     LogManager.w(TAG, "Cannot stop scan. Bluetooth may be turned off.");
@@ -271,7 +302,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                     LogManager.e(npe, TAG, "Cannot stop scan. Unexpected NPE.");
                 } catch (SecurityException e) {
                     // Thrown by Samsung Knox devices if bluetooth access denied for an app
-                    LogManager.e(TAG, "Cannot stop scan.  Security Exception");
+                    LogManager.e(TAG, "Cannot stop scan.  Security Exception", e);
                 }
 
             }
@@ -287,7 +318,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             LogManager.w(TAG, "Cannot get bluetooth adapter");
         }
         catch (SecurityException e) {
-            LogManager.w(TAG, "SecurityException checking if bluetooth is on");
+            LogManager.w(TAG, "SecurityException checking if bluetooth is on", e);
         }
         return false;
     }
@@ -306,7 +337,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
             }
         }
         catch (SecurityException e) {
-            LogManager.w(TAG, "SecurityException making new Android L scanner");
+            LogManager.w(TAG, "SecurityException making new Android L scanner", e);
         }
         return mScanner;
     }
@@ -327,7 +358,8 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                         }
                     }
                     mCycledLeScanCallback.onLeScan(scanResult.getDevice(),
-                            scanResult.getRssi(), scanResult.getScanRecord().getBytes());
+                            scanResult.getRssi(), scanResult.getScanRecord().getBytes(),
+                            System.currentTimeMillis() - SystemClock.elapsedRealtime() + scanResult.getTimestampNanos() / 1000000);
                     if (mBackgroundLScanStartTime > 0) {
                         LogManager.d(TAG, "got a filtered scan result in the background.");
                     }
@@ -339,7 +371,8 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                     LogManager.d(TAG, "got batch records");
                     for (ScanResult scanResult : results) {
                         mCycledLeScanCallback.onLeScan(scanResult.getDevice(),
-                                scanResult.getRssi(), scanResult.getScanRecord().getBytes());
+                                scanResult.getRssi(), scanResult.getScanRecord().getBytes(),
+                                System.currentTimeMillis() - SystemClock.elapsedRealtime() + scanResult.getTimestampNanos() / 1000000);
                     }
                     if (mBackgroundLScanStartTime > 0) {
                         LogManager.d(TAG, "got a filtered batch scan result in the background.");
@@ -349,9 +382,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                 @MainThread
                 @Override
                 public void onScanFailed(int errorCode) {
-                    Intent intent = new Intent("onScanFailed");
-                    intent.putExtra("errorCode", errorCode);
-                    LocalBroadcastManager.getInstance(CycledLeScannerForLollipop.this.mContext).sendBroadcast(intent);
+                    BluetoothMedic.getInstance().processMedicAction("onScanFailed", errorCode);
                     switch (errorCode) {
                         case SCAN_FAILED_ALREADY_STARTED:
                             LogManager.e(
@@ -389,4 +420,18 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
         }
         return leScanCallback;
     }
+
+    private BroadcastReceiver mScreenOffReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!mMainScanCycleActive) {
+                LogManager.d(TAG, "Screen has gone off while outside the main scan cycle.  We will do nothing.");
+            }
+            else {
+                LogManager.d(TAG, "Screen has gone off while using a wildcard scan filter.  Restarting scanner with non-empty filters.");
+                stopScan();
+                startScan();
+            }
+        }
+    };
 }
